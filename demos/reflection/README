@@ -1,0 +1,2 @@
+Build string
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cpp26.cmake
