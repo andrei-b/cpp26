@@ -7,6 +7,7 @@
 struct Person {
     int age;
     const double height;
+    int add(int a, int b) { return a + b; }
 };
 
 static void print_u8(std::u8string_view s) {
@@ -23,6 +24,7 @@ enum MemberFlags : std::uint32_t {
     MF_FUNDAMENTAL = 1u << 5,
     MF_CLASS       = 1u << 6,
     MF_ENUM        = 1u << 7,
+    MF_FUNCTION = 1u << 8,
 };
 
 struct MemberDesc {
@@ -44,35 +46,44 @@ consteval std::u8string_view safe_type_string(std::meta::info t) {
 template <typename T>
 struct ReflectedMembers {
     static consteval auto make() {
-        auto mems = nonstatic_data_members_of(^^T, std::meta::access_context::current());
+        auto mems = members_of(^^T, std::meta::access_context::current());
 
         std::array<MemberDesc, 64> out{};
         std::size_t n = mems.size();
 
         for (std::size_t i = 0; i < n && i < out.size(); ++i) {
             auto m = mems[i];
-            auto t = type_of(m);
+            if (is_function(m)) {
+                std::uint32_t f = 0;
+                f = MF_FUNCTION;
+                out[i] = MemberDesc{
+                    safe_member_name(m),
+                    {},
+                    f
+                };
+            } else {
+                auto t = type_of(m);
 
-            std::uint32_t f = 0;
-            if (is_const(t))    f |= MF_CONST;
-            if (is_volatile(t)) f |= MF_VOLATILE;
+                std::uint32_t f = 0;
+                if (is_const(t))    f |= MF_CONST;
+                if (is_volatile(t)) f |= MF_VOLATILE;
 
-            if (is_pointer_type(t))          f |= MF_POINTER;
-            if (is_lvalue_reference_type(t)) f |= MF_LREF;
-            if (is_rvalue_reference_type(t)) f |= MF_RREF;
+                if (is_pointer_type(t))          f |= MF_POINTER;
+                if (is_lvalue_reference_type(t)) f |= MF_LREF;
+                if (is_rvalue_reference_type(t)) f |= MF_RREF;
 
-            auto base = remove_cvref(t);
-            if (is_fundamental_type(base)) f |= MF_FUNDAMENTAL;
-            else if (is_class_type(base))  f |= MF_CLASS;
-            else if (is_enum_type(base))   f |= MF_ENUM;
+                auto base = remove_cvref(t);
+                if (is_fundamental_type(base)) f |= MF_FUNDAMENTAL;
+                else if (is_class_type(base))  f |= MF_CLASS;
+                else if (is_enum_type(base))   f |= MF_ENUM;
 
-            out[i] = MemberDesc{
-                safe_member_name(m),
-                safe_type_string(t), // NOTE: use t (keeps const/&/* in display string if implementation prints them)
-                f
-            };
+                out[i] = MemberDesc{
+                    safe_member_name(m),
+                    safe_type_string(t), // NOTE: use t (keeps const/&/* in display string if implementation prints them)
+                    f
+                };
+            }
         }
-
         return std::pair{out, n};
     }
 
@@ -98,7 +109,7 @@ static void print_flags(std::uint32_t f) {
     if (f & MF_FUNDAMENTAL) add("fundamental");
     else if (f & MF_CLASS)  add("class");
     else if (f & MF_ENUM)   add("enum");
-    else                    add("other");
+    if (f & MF_FUNCTION) add("function");
 }
 
 int main() {
