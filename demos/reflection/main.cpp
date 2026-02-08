@@ -58,7 +58,7 @@ struct ReflectedMembers {
                 f = MF_FUNCTION;
                 out[i] = MemberDesc{
                     safe_member_name(m),
-                    {},
+                    u8display_string_of(m),
                     f
                 };
             } else {
@@ -109,7 +109,7 @@ static void print_flags(std::uint32_t f) {
     if (f & MF_FUNDAMENTAL) add("fundamental");
     else if (f & MF_CLASS)  add("class");
     else if (f & MF_ENUM)   add("enum");
-    if (f & MF_FUNCTION) add("function");
+    if (f & MF_FUNCTION)    add("function");
 }
 
 int main() {
