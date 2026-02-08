@@ -31,6 +31,7 @@ struct MemberDesc {
     std::u8string_view name;          // identifier
     std::u8string_view type_display;  // printable type string (works for int/double/etc)
     std::uint32_t flags;
+    std::u8string_view params[10]; // for functions: parameter type display strings
 };
 
 consteval std::u8string_view safe_member_name(std::meta::info m) {
@@ -56,11 +57,16 @@ struct ReflectedMembers {
             if (is_function(m)) {
                 std::uint32_t f = 0;
                 f = MF_FUNCTION;
+                auto params = parameters_of(m);
                 out[i] = MemberDesc{
                     safe_member_name(m),
                     u8display_string_of(m),
                     f
                 };
+                for (std::size_t j = 0; j < params.size() && j < std::size(out[i].params); ++j) {
+                    out[i].params[j] = safe_type_string(type_of(params[j]));
+                }
+
             } else {
                 auto t = type_of(m);
 
@@ -124,6 +130,18 @@ int main() {
         print_u8(d.type_display);
         std::cout << "  [";
         print_flags(d.flags);
-        std::cout << "]\n";
+        std::cout << "]";
+        if (d.flags & MF_FUNCTION) {
+            std::cout << "  (params: ";
+            bool first = true;
+            for (const auto& p : d.params) {
+                if (p.empty()) break;
+                if (!first) std::cout << ", ";
+                print_u8(p);
+                first = false;
+            }
+            std::cout << ")";
+        }
+        std::cout << "\n";
     }
 }
