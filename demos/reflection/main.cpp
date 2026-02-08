@@ -8,6 +8,7 @@ struct Person {
     int age;
     const double height;
     int add(int a, int b) { return a + b; }
+    static  int foo() { return 42; }
 };
 
 static void print_u8(std::u8string_view s) {
@@ -15,7 +16,7 @@ static void print_u8(std::u8string_view s) {
                     static_cast<std::streamsize>(s.size()));
 }
 
-enum MemberFlags : std::uint32_t {
+enum MemberFlags {
     MF_CONST       = 1u << 0,
     MF_VOLATILE    = 1u << 1,
     MF_POINTER     = 1u << 2,
@@ -24,7 +25,10 @@ enum MemberFlags : std::uint32_t {
     MF_FUNDAMENTAL = 1u << 5,
     MF_CLASS       = 1u << 6,
     MF_ENUM        = 1u << 7,
-    MF_FUNCTION = 1u << 8,
+    MF_FUNCTION    = 1u << 8,
+    MF_CONSTRUCTOR = 1u << 9,
+    MF_DESTRUCTOR  = 1u << 10,
+    MF_STATIC = 1u << 11,
 };
 
 struct MemberDesc {
@@ -32,6 +36,7 @@ struct MemberDesc {
     std::u8string_view type_display;  // printable type string (works for int/double/etc)
     std::uint32_t flags;
     std::u8string_view params[10]; // for functions: parameter type display strings
+    std::u8string_view return_type;
 };
 
 consteval std::u8string_view safe_member_name(std::meta::info m) {
@@ -57,7 +62,11 @@ struct ReflectedMembers {
             if (is_function(m)) {
                 std::uint32_t f = 0;
                 f = MF_FUNCTION;
+                if (std::meta::is_static_member(m))
+                    f |= MF_STATIC;
                 auto params = parameters_of(m);
+                if (is_constructor(m)) f |= MF_CONSTRUCTOR;
+                else if (is_destructor(m)) f |= MF_DESTRUCTOR;
                 out[i] = MemberDesc{
                     safe_member_name(m),
                     u8display_string_of(m),
@@ -66,7 +75,10 @@ struct ReflectedMembers {
                 for (std::size_t j = 0; j < params.size() && j < std::size(out[i].params); ++j) {
                     out[i].params[j] = safe_type_string(type_of(params[j]));
                 }
-
+                auto has_return_type = !(out[i].flags & MF_CONSTRUCTOR) && !(out[i].flags & MF_DESTRUCTOR);
+                if (has_return_type) {
+                    out[i].return_type = safe_type_string(return_type_of(m));
+                }
             } else {
                 auto t = type_of(m);
 
@@ -116,6 +128,9 @@ static void print_flags(std::uint32_t f) {
     else if (f & MF_CLASS)  add("class");
     else if (f & MF_ENUM)   add("enum");
     if (f & MF_FUNCTION)    add("function");
+    if (f & MF_CONSTRUCTOR) add ("constructor");
+    else if (f & MF_DESTRUCTOR) add ("destructor");
+    if (f & MF_STATIC) add ("static");
 }
 
 int main() {
@@ -132,7 +147,7 @@ int main() {
         print_flags(d.flags);
         std::cout << "]";
         if (d.flags & MF_FUNCTION) {
-            std::cout << "  (params: ";
+            std::cout << "  (";
             bool first = true;
             for (const auto& p : d.params) {
                 if (p.empty()) break;
@@ -141,6 +156,11 @@ int main() {
                 first = false;
             }
             std::cout << ")";
+            if (!d.return_type.empty()) {
+                std::cout << " -> ";
+                print_u8(d.return_type);
+            }
+
         }
         std::cout << "\n";
     }
