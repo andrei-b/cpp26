@@ -91,6 +91,11 @@ struct VariadicInvoker {
         Obj& o = *static_cast<Obj*>(obj);
         return invoke_impl(o, argv, std::index_sequence_for<Args...>{});
     }
+    template <typename... A>
+        static InvokeResult invoke_2(Obj& o, A&&... a) {
+            return invoke_impl(o, std::span<const Value>{to_value(std::forward<A>(a))...}, std::index_sequence_for<Args...>{});
+        }
+
 
 private:
     template <std::size_t... I>
@@ -126,7 +131,7 @@ template <typename T> consteval std::meta::info find_member_function(std::u8stri
         if (std::meta::is_function(m) && std::meta::u8identifier_of(m) == wanted) {
             return m;
         }
-    } // You can also std::terminate or throw; error handling varies by implementation
+    }
     throw "member function not found";
 }
 
@@ -149,6 +154,9 @@ struct MethodThunk {
 struct MethodEntry {
     std::u8string_view name;
     InvokeResult (*invoke)(void* obj, std::span<const Value> args);
+
+    template <typename... Args>
+    static InvokeResult (*invoke_2)(Person person, Args... args);
 };
 
 // Register methods with their *real* signatures:
@@ -188,5 +196,6 @@ int main() {
         std::vector<Value> args = { 1, 2 };
         auto r = m->invoke(&p, args);
         if (!r.error) std::cout << "add -> " << std::get<int>(r.value) << "\n";
+        auto r2 = m->invoke_2<int, int>(p, 3, 4);
     }
 }
