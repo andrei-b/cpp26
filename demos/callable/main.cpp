@@ -16,7 +16,8 @@ struct Calc {
 template <class T>
 using PMF2 = int (T::*)(int, int);
 
-using PMF1 = int (Calc::*)(int);
+template <class T>
+using PMF1 = int (T::*)(int);
 
 template <std::meta::info Fn, class C, class PMF>
 constexpr auto make_callable_from() {
@@ -28,7 +29,7 @@ constexpr auto make_callable_from() {
 
 int main() {
     using PMF2Calc = PMF2<Calc>;
-    using PMF1Calc = PMF1;
+    using PMF1Calc = PMF1<Calc>;
 
     // disambiguate overload
     constexpr PMF2Calc p2 = static_cast<PMF2Calc>(&Calc::add);
