@@ -3,9 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
+#include <vector>
 
 struct Person {
     int age;
@@ -18,184 +21,77 @@ struct Person {
     }
 };
 
-using Value = std::variant<std::monostate, bool, int, long long, double, std::string>;
-
-inline const char* value_type_name(const Value& v) {
-    switch (v.index()) {
-        case 0: return "void";
-        case 1: return "bool";
-        case 2: return "int";
-        case 3: return "long long";
-        case 4: return "double";
-        case 5: return "string";
-        default: return "?";
-    }
-}
-
-template <class T>
-std::optional<T> value_as(const Value& v) {
-    if (auto p = std::get_if<T>(&v)) return *p;
-    return std::nullopt;
-}
-
-template <class T>
-Value to_value(T&& x) {
-    using U = std::remove_cvref_t<T>;
-    if constexpr (std::is_same_v<U, void>) {
-        return Value{std::monostate{}};
-    } else if constexpr (std::is_same_v<U, bool>) {
-        return Value{static_cast<bool>(x)};
-    } else if constexpr (std::is_same_v<U, int>) {
-        return Value{static_cast<int>(x)};
-    } else if constexpr (std::is_same_v<U, long long>) {
-        return Value{static_cast<long long>(x)};
-    } else if constexpr (std::is_same_v<U, double>) {
-        return Value{static_cast<double>(x)};
-    } else if constexpr (std::is_same_v<U, std::string>) {
-        return Value{std::forward<T>(x)};
-    } else if constexpr (std::is_same_v<U, const char*>) {
-        return Value{std::string(x)};
-    } else {
-        static_assert(!sizeof(U), "Type not supported in Value/to_value()");
-    }
-}
-
-
-
-template <std::size_t N>
-struct fixed_string {
-    char8_t value[N];
-    consteval fixed_string(const char (&s)[N]) {
-        for (std::size_t i = 0; i < N; ++i) value[i] = static_cast<char8_t>(s[i]);
-    }
-    consteval fixed_string(const char8_t (&s)[N]) {
-        for (std::size_t i = 0; i < N; ++i) value[i] = s[i];
-    }
-    constexpr std::u8string_view view() const noexcept {
-        return std::u8string_view(value, N - 1); // drop terminating '\0'
-      }
-    constexpr bool operator==(fixed_string const&) const = default;
-};
-
-struct InvokeResult {
-    Value value;          // monostate => void
-    const char* error;    // nullptr if ok
-};
-
-template <fixed_string Name, class Obj, class R, class... Args>
-struct VariadicInvoker {
-    static InvokeResult invoke(void* obj, std::span<const Value> argv) {
-        if (argv.size() != sizeof...(Args))
-            return {Value{std::monostate{}}, "arity mismatch"};
-
-        Obj& o = *static_cast<Obj*>(obj);
-        return invoke_impl(o, argv, std::index_sequence_for<Args...>{});
-    }
-    template <typename... A>
-        static InvokeResult invoke_2(Obj& o, A&&... a) {
-            return invoke_impl(o, std::span<const Value>{to_value(std::forward<A>(a))...}, std::index_sequence_for<Args...>{});
-        }
-
-
-private:
-    template <std::size_t... I>
-    static InvokeResult invoke_impl(Obj& o,
-                                    std::span<const Value> argv,
-                                    std::index_sequence<I...>) {
-
-        // Build a tuple<optional<Arg0>, optional<Arg1>, ...>
-        auto conv = std::tuple<std::optional<std::remove_cvref_t<Args>>...>{
-            value_as<std::remove_cvref_t<Args>>(argv[I])...
-        };
-
-        // Check all converted OK
-        bool ok = ((std::get<I>(conv).has_value()) && ...);
-        if (!ok) return {Value{std::monostate{}}, "type mismatch"};
-
-        // Call
-        if constexpr (std::is_void_v<R>) {
-            call_reflected<Name>(o, (*std::get<I>(conv))...);
-            return {Value{std::monostate{}}, nullptr};
-        } else {
-            R r = call_reflected<Name>(o, (*std::get<I>(conv))...);
-            return {to_value(r), nullptr};
-        }
-    }
-};
-
-template <std::size_t N>
-fixed_string(const char (&)[N]) -> fixed_string<N>;
-
-template <typename T> consteval std::meta::info find_member_function(std::u8string_view wanted) {
-    for (std::meta::info m : std::meta::members_of(^^T, std::meta::access_context::current())) { // GCC branch uses ^^
-        if (std::meta::is_function(m) && std::meta::u8identifier_of(m) == wanted) {
-            return m;
-        }
-    }
-    throw "member function not found";
-}
-
-
-template <fixed_string Name, class T, class... Args>
-decltype(auto) call_reflected(T&& obj, Args&&... args) {
-    using U = std::remove_reference_t<T>;
-    constexpr std::meta::info mem = find_member_function<U>(Name.view()); // splice the member function name into the call:
-    return std::forward<T>(obj).[:mem:](std::forward<Args>(args)...);
-}
-
-template <fixed_string Name>
-struct MethodThunk {
-    static int call_i(Person& obj, int x) {
-        // calls Person::test_call(int) etc
-        return call_reflected<Name>(obj, x);
-    }
-};
-
 struct MethodEntry {
-    std::u8string_view name;
-    InvokeResult (*invoke)(void* obj, std::span<const Value> args);
-
-    template <typename... Args>
-    static InvokeResult (*invoke_2)(Person person, Args... args);
+    std::string_view name;
+    bool is_static;
 };
 
-// Register methods with their *real* signatures:
-template <fixed_string Name, class R, class... Args>
-consteval MethodEntry entry_for() {
-    return MethodEntry{
-        Name.view(),
-        &VariadicInvoker<Name, Person, R, Args...>::invoke
-    };
+using MethodTable = std::vector<MethodEntry>;
+
+template <typename T>
+consteval auto reflected_members()
+{
+    constexpr auto ctx = std::meta::access_context::current();
+    return std::define_static_array(std::meta::members_of(^^std::remove_cvref_t<T>, ctx));
 }
 
-// Build a constexpr table (explicit list)
-static constexpr auto person_methods = std::array{
-    entry_for<"test_call", int, int>(),
-    entry_for<"add", int, int, int>(),
-    // entry_for<"something", void, double, std::string>(),
-};
+template <typename T>
+auto build_table(T&)
+{
+    MethodTable result;
+    template for (constexpr auto m : reflected_members<T>())
+    {
+        if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m))
+        {
+            if (std::string_view name = std::meta::identifier_of(m); !name.empty())
+            {
+                result.push_back(MethodEntry{name, std::meta::is_static_member(m)});
+            }
+        }
+    }
+    return result;
+}
 
-inline const MethodEntry* find_method(std::u8string_view name) {
-    for (auto const& e : person_methods)
-        if (e.name == name) return &e;
-    return nullptr;
+template <typename T, typename... Args>
+decltype(auto) call_method(T&& obj, std::string_view method_name, Args&&... args) {
+    template for (constexpr auto m : reflected_members<T>())
+    {
+        if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m))
+        {
+            if (method_name == std::meta::identifier_of(m))
+            {
+                if constexpr (std::meta::is_static_member(m))
+                {
+                    auto fn = &[:m:];
+                    if constexpr (requires { fn(std::forward<Args>(args)...); }) {
+                        return fn(std::forward<Args>(args)...);
+                    }
+                }
+                else
+                {
+                    auto pmf = &[:m:];
+                    if constexpr (requires { (std::forward<T>(obj).*pmf)(std::forward<Args>(args)...); }) {
+                        return (std::forward<T>(obj).*pmf)(std::forward<Args>(args)...);
+                    }
+                }
+            }
+        }
+    }
+
+    throw std::runtime_error("method not found or argument mismatch");
 }
 
 int main() {
     Person p{};
+    auto table = build_table(p);
+    for (const auto& entry : table) {
+        std::cout << "Method: " << entry.name
 
-    if (auto m = find_method(u8"test_call")) {
-        std::vector<Value> args = { 42 };
-        auto r = m->invoke(&p, args);
-        if (r.error) std::cout << "error: " << r.error << "\n";
-        else std::cout << "returned type=" << value_type_name(r.value)
-                       << " value=" << std::get<int>(r.value) << "\n";
+                  << ", Static: " << std::boolalpha << entry.is_static
+                  << "\n";
     }
-
-    if (auto m = find_method(u8"add")) {
-        std::vector<Value> args = { 1, 2 };
-        auto r = m->invoke(&p, args);
-        if (!r.error) std::cout << "add -> " << std::get<int>(r.value) << "\n";
-        auto r2 = m->invoke_2<int, int>(p, 3, 4);
-    }
+    int i = call_method(p, "add", 123, 456);
+    auto m = "test_call";
+    int c = call_method(p, m, 789);
+    std::cout << "Result of add: " << i << "\n";
 }
