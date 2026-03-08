@@ -43,11 +43,11 @@ protected:
     }
 
     template <typename T, typename R, typename... Args>
-        R call_method_impl_with_args(T&& obj, std::string_view method_name, Args&&... args)
+        R call_method_impl_with_args(T& obj, std::string_view method_name, Args&&... args)
             requires true
     {
         constexpr auto ctx = std::meta::access_context::current();
-        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^std::remove_cvref_t<T>, ctx)))
+        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^T, ctx)))
         {
             if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m))
             {
@@ -56,19 +56,15 @@ protected:
                     if constexpr (std::meta::is_static_member(m))
                     {
                         auto fn = &[:m:];
-                        if constexpr (requires { fn(std::forward<Args>(args)...); }) {
-                            if constexpr (std::is_same_v<std::invoke_result_t<decltype(fn), Args...>, R>) {
-                                return fn(std::forward<Args>(args)...);
-                            }
+                        if constexpr (std::is_invocable_r_v<R, decltype(fn), Args...>) {
+                            return fn(std::forward<Args>(args)...);
                         }
                     }
                     else
                     {
                         auto pmf = &[:m:];
-                        if constexpr (requires { (std::forward<T>(obj).*pmf)(std::forward<Args>(args)...); }) {
-                            if constexpr (std::is_same_v<std::invoke_result_t<decltype(pmf), T, Args...>, R>) {
-                                return (std::forward<T>(obj).*pmf)(std::forward<Args>(args)...);
-                            }
+                        if constexpr (std::is_invocable_r_v<R, decltype(pmf), T&, Args...>) {
+                            return (obj.*pmf)(std::forward<Args>(args)...);
                         }
                     }
                 }
@@ -153,19 +149,32 @@ public:
     int add(int a, int b) {
         return a + b;
     }
+    int add(int a, int b, int c) {
+        return a + b + c;
+    }
     double distance(double x1, double y1, double x2, double y2) {
         return std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
     }
     std::string toString(double x, double y) {
         return std::to_string(x) + ", " + std::to_string(y);
     }
+    template <typename Sig>
+    requires (std::tuple_size_v<typename function_traits<TestClass, Sig>::args_tuple> == 0)
+    decltype(auto) call_method(std::string_view method_name) {
+        using T = std::remove_reference_t<decltype(*this)>;
+        using traits = function_traits<T, Sig>;
+        using R = typename traits::return_type;
+
+        return call_method_impl_with_args<T, R>(*this, method_name);
+    }
+
     template <typename Sig, typename... Args>
     decltype(auto) call_method(std::string_view method_name, Args&&... args) {
         using T = std::remove_reference_t<decltype(*this)>;
         using traits = function_traits<T, Sig>;
         using R = typename traits::return_type;
 
-        return call_method_impl_with_args<T, R, Args...>(std::forward<T>(*this), method_name, std::forward<Args>(args)...);
+        return call_method_impl_with_args<T, R, Args...>(*this, method_name, std::forward<Args>(args)...);
     }
     ~TestClass() override = default;
 };
@@ -180,6 +189,8 @@ int main() {
     std::string str = tc.call_method<std::string(double, double)>("toString", 1.6, 2.5);
     std::cout << "String: " << str << "\n";
     std::cout << "Distance: " << d << "\n";
+    auto s1 = tc.call_method<int(int, int, int)>("add", 1, 2, 3);
+    std::cout << "Sum with 3 args: " << s1 << "\n";
     return 0;
     // TIP See CLion help at <a href="https://www.jetbrains.com/help/clion/">jetbrains.com/help/clion/</a>. Also, you can try interactive lessons for CLion by selecting 'Help | Learn IDE Features' from the main menu.
 }
