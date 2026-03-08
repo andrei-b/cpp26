@@ -164,7 +164,6 @@ public:
         using T = std::remove_reference_t<decltype(*this)>;
         using traits = function_traits<T, Sig>;
         using R = typename traits::return_type;
-        using args_tuple = typename traits::args_tuple;
 
         return call_method_impl_with_args<T, R, Args...>(std::forward<T>(*this), method_name, std::forward<Args>(args)...);
     }
