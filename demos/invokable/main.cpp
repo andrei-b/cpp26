@@ -1,8 +1,8 @@
 #include <any>
 #include <cmath>
-#include <functional>
 #include <iostream>
 #include <meta>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,214 +10,223 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <map>
 
-// Universal wrapper for reflected invokers
-class UniversalInvoker {
-private:
-    std::function<std::any(std::vector<std::any>)> invoker_;
-    std::string method_name_;
-
-public:
-    UniversalInvoker() = default;
-
-    template <typename Fn>
-    UniversalInvoker(Fn&& fn, std::string_view name)
-        : method_name_(name) {
-        invoker_ = [fn = std::forward<Fn>(fn)](std::vector<std::any> /*args*/) -> std::any {
-            // This wraps the generic lambda into a vector-based interface
-            // In practice, you'd unpack args based on runtime info
-            // For now, we store the lambda as-is for direct call
-            throw std::runtime_error("Use invoke_with template for typed calls");
-        };
-    }
-
-    // Alternative: store the original lambda directly
-    template <typename Fn>
-    static auto wrap(Fn&& fn, std::string_view name) {
-        return std::pair{std::string(name), std::function([fn = std::forward<Fn>(fn)](auto&&... args) -> std::any {
-            return fn(std::forward<decltype(args)>(args)...);
-        })};
-    }
-
-    const std::string& name() const { return method_name_; }
-};
-
-// Type-erased invoker storage using std::function with variadic template
-using ReflectedInvoker = std::function<std::any(std::any const&, ...)>;
-
-// Helper to convert reflected lambda to a storable form
-template <typename Lambda>
-auto to_universal_invoker(Lambda&& lambda) {
-    return [fn = std::forward<Lambda>(lambda)](auto&&... args) -> std::any {
-        return fn(std::forward<decltype(args)>(args)...);
-    };
-}
+// ============================================================
+// Base runtime interface
+// ============================================================
 
 class Invokable {
 public:
-    template <class C, typename Sig>
-    struct function_traits;
-
-    template <class C, typename R, typename... Args>
-    struct function_traits<C, R(Args...)> {
-        using return_type = R;
-        using args_tuple = std::tuple<Args...>;
-    };
-
     virtual ~Invokable() = default;
 
-protected:
-    template <class C, typename Sig>
-    auto make_invoker(C* c, std::string_view method_name) {
-        using traits = function_traits<C, Sig>;
-        using R = typename traits::return_type;
-        using args_tuple = typename traits::args_tuple;
-        return make_invoker_from_tuple<C, R>(c, method_name, args_tuple{});
+    virtual std::any invoke(std::string_view method_name,
+                            std::span<const std::any> args) = 0;
+};
+
+// ============================================================
+// Function traits for member functions
+// ============================================================
+
+template <typename T>
+struct function_traits;
+
+// non-const member function
+template <typename C, typename R, typename... Args>
+struct function_traits<R (C::*)(Args...)> {
+    using class_type  = C;
+    using return_type = R;
+    using args_tuple  = std::tuple<Args...>;
+    static constexpr bool is_const = false;
+};
+
+// const member function
+template <typename C, typename R, typename... Args>
+struct function_traits<R (C::*)(Args...) const> {
+    using class_type  = C;
+    using return_type = R;
+    using args_tuple  = std::tuple<Args...>;
+    static constexpr bool is_const = true;
+};
+
+// static/free function pointer
+template <typename R, typename... Args>
+struct function_traits<R (*)(Args...)> {
+    using class_type  = void;
+    using return_type = R;
+    using args_tuple  = std::tuple<Args...>;
+    static constexpr bool is_const = false;
+};
+
+// ============================================================
+// any conversion helpers
+// ============================================================
+
+template <typename T>
+using any_arg_t = std::remove_cvref_t<T>;
+
+template <typename T>
+T any_cast_value(const std::any& a) {
+    using U = any_arg_t<T>;
+
+    if constexpr (std::is_lvalue_reference_v<T>) {
+        using Base = std::remove_reference_t<T>;
+        auto p = std::any_cast<std::remove_cv_t<Base>>(&a);
+        if (!p) {
+            throw std::bad_any_cast{};
+        }
+        return static_cast<T>(*p);
+    } else {
+        auto p = std::any_cast<U>(&a);
+        if (!p) {
+            throw std::bad_any_cast{};
+        }
+        return *p;
+    }
+}
+
+// ============================================================
+// Invoke helpers for member functions
+// ============================================================
+
+template <class C, class PMF, class Tuple, std::size_t... I>
+std::any invoke_member_with_anys_impl(C& obj,
+                                      PMF pmf,
+                                      std::span<const std::any> args,
+                                      std::index_sequence<I...>) {
+    using traits = function_traits<PMF>;
+    using R = typename traits::return_type;
+
+    if constexpr (std::is_void_v<R>) {
+        (obj.*pmf)(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...);
+        return std::any{};
+    } else {
+        return std::any(
+            (obj.*pmf)(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...)
+        );
+    }
+}
+
+template <class C, class PMF>
+std::any invoke_member_with_anys(C& obj,
+                                 PMF pmf,
+                                 std::span<const std::any> args) {
+    using traits = function_traits<PMF>;
+    using Tuple = typename traits::args_tuple;
+    constexpr std::size_t N = std::tuple_size_v<Tuple>;
+
+    if (args.size() != N) {
+        throw std::runtime_error("argument count mismatch");
     }
 
-    template <class C>
-    auto make_invoker_reflected(C* c, std::string_view method_name) {
-        return [c, method_name](auto&&... args) -> std::any {
-            return Invokable::call_method_any_with_args<C>(c, method_name, std::forward<decltype(args)>(args)...);
-        };
+    return invoke_member_with_anys_impl<C, PMF, Tuple>(
+        obj, pmf, args, std::make_index_sequence<N>{});
+}
+
+// ============================================================
+// Invoke helpers for static/free functions
+// ============================================================
+
+template <class FN, class Tuple, std::size_t... I>
+std::any invoke_static_with_anys_impl(FN fn,
+                                      std::span<const std::any> args,
+                                      std::index_sequence<I...>) {
+    using traits = function_traits<FN>;
+    using R = typename traits::return_type;
+
+    if constexpr (std::is_void_v<R>) {
+        fn(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...);
+        return std::any{};
+    } else {
+        return std::any(
+            fn(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...)
+        );
+    }
+}
+
+template <class FN>
+std::any invoke_static_with_anys(FN fn,
+                                 std::span<const std::any> args) {
+    using traits = function_traits<FN>;
+    using Tuple = typename traits::args_tuple;
+    constexpr std::size_t N = std::tuple_size_v<Tuple>;
+
+    if (args.size() != N) {
+        throw std::runtime_error("argument count mismatch");
     }
 
-    template <typename T, typename Sig>
-    decltype(auto) call_method(T&& obj, std::string_view method_name) {
-        using traits = function_traits<T, Sig>;
-        using R = typename traits::return_type;
-        using args_tuple = typename traits::args_tuple;
-        return call_method_impl<T, R>(std::forward<T>(obj), method_name, args_tuple{});
-    }
+    return invoke_static_with_anys_impl<FN, Tuple>(
+        fn, args, std::make_index_sequence<N>{});
+}
 
-    template <typename T, typename R, typename... Args>
-    R call_method_impl_with_args(T& obj, std::string_view method_name, Args&&... args) {
-        constexpr auto ctx = std::meta::access_context::current();
-        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^T, ctx))) {
-            if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
-                if (method_name == std::meta::identifier_of(m)) {
-                    if constexpr (std::meta::is_static_member(m)) {
-                        auto fn = &[:m:];
-                        if constexpr (std::is_invocable_r_v<R, decltype(fn), Args...>) {
-                            return fn(std::forward<Args>(args)...);
+// ============================================================
+// Reflection-based dispatcher
+// ============================================================
+
+template <class T>
+std::any invoke_reflected(T& obj,
+                          std::string_view method_name,
+                          std::span<const std::any> args) {
+    constexpr auto ctx = std::meta::access_context::current();
+
+    bool found_name = false;
+    bool matched_overload = false;
+    std::any result;
+
+    template for (constexpr auto m :
+        std::define_static_array(std::meta::members_of(^^T, ctx))) {
+
+        if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
+            if (method_name == std::meta::identifier_of(m)) {
+                found_name = true;
+
+                // static member function
+                if constexpr (std::meta::is_static_member(m)) {
+                    auto fn = &[:m:];
+                    try {
+                        result = invoke_static_with_anys(fn, args);
+                        if (matched_overload) {
+                            throw std::runtime_error("ambiguous overload");
                         }
-                    } else {
-                        auto pmf = &[:m:];
-                        if constexpr (std::is_invocable_r_v<R, decltype(pmf), T&, Args...>) {
-                            return (obj.*pmf)(std::forward<Args>(args)...);
+                        matched_overload = true;
+                    } catch (const std::bad_any_cast&) {
+                        // wrong argument types, keep scanning overloads
+                    } catch (const std::runtime_error&) {
+                        // wrong arg count, keep scanning overloads
+                    }
+                }
+                // non-static member function
+                else {
+                    auto pmf = &[:m:];
+                    try {
+                        result = invoke_member_with_anys(obj, pmf, args);
+                        if (matched_overload) {
+                            throw std::runtime_error("ambiguous overload");
                         }
+                        matched_overload = true;
+                    } catch (const std::bad_any_cast&) {
+                        // wrong argument types, keep scanning overloads
+                    } catch (const std::runtime_error&) {
+                        // wrong arg count, keep scanning overloads
                     }
                 }
             }
         }
-        throw std::runtime_error("method not found or argument mismatch");
     }
 
-    template <typename T, typename... Args>
-    static std::any call_method_any_with_args(T* obj, std::string_view method_name, Args&&... args) {
-        constexpr auto ctx = std::meta::access_context::current();
-        bool matched = false;
-        std::any result;
-
-        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^T, ctx))) {
-            if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
-                if (method_name == std::meta::identifier_of(m)) {
-                    if constexpr (std::meta::is_static_member(m)) {
-                        auto fn = &[:m:];
-                        if constexpr (requires { fn(std::forward<Args>(args)...); }) {
-                            if (matched) {
-                                throw std::runtime_error("ambiguous overload for provided arguments");
-                            }
-                            matched = true;
-                            if constexpr (std::is_void_v<std::invoke_result_t<decltype(fn), Args...>>) {
-                                fn(std::forward<Args>(args)...);
-                                result = std::any{};
-                            } else {
-                                result = std::any(fn(std::forward<Args>(args)...));
-                            }
-                        }
-                    } else {
-                        auto pmf = &[:m:];
-                        if constexpr (requires { (obj->*pmf)(std::forward<Args>(args)...); }) {
-                            if (matched) {
-                                throw std::runtime_error("ambiguous overload for provided arguments");
-                            }
-                            matched = true;
-                            if constexpr (std::is_void_v<std::invoke_result_t<decltype(pmf), T&, Args...>>) {
-                                (obj->*pmf)(std::forward<Args>(args)...);
-                                result = std::any{};
-                            } else {
-                                result = std::any((obj->*pmf)(std::forward<Args>(args)...));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!matched) {
-            throw std::runtime_error("method not found or argument mismatch");
-        }
+    if (matched_overload) {
         return result;
     }
 
-private:
-    template <class C, typename R, typename... Args>
-    std::function<R(Args...)> make_invoker_impl(C* c, std::string_view method_name) {
-        constexpr auto ctx = std::meta::access_context::current();
-        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^C, ctx))) {
-            if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
-                if (method_name == std::meta::identifier_of(m)) {
-                    if constexpr (std::meta::is_static_member(m)) {
-                        auto fn = &[:m:];
-                        if constexpr (std::is_invocable_r_v<R, decltype(fn), Args...>) {
-                            return [fn](Args... args) -> R {
-                                return fn(std::forward<Args>(args)...);
-                            };
-                        }
-                    } else {
-                        auto pmf = &[:m:];
-                        if constexpr (std::is_invocable_r_v<R, decltype(pmf), C*, Args...>) {
-                            return [c, pmf](Args... args) -> R {
-                                return (c->*pmf)(std::forward<Args>(args)...);
-                            };
-                        }
-                    }
-                }
-            }
-        }
-        throw std::runtime_error("method not found or signature mismatch");
+    if (found_name) {
+        throw std::runtime_error("method found, but no overload matches provided arguments");
     }
 
-    template <class C, typename R, typename... Args>
-    auto make_invoker_from_tuple(C* c, std::string_view method_name, std::tuple<Args...>) {
-        return make_invoker_impl<C, R, Args...>(c, method_name);
-    }
+    throw std::runtime_error("method not found");
+}
 
-    template <typename T, typename R, typename ArgsTuple>
-    decltype(auto) call_method_impl(T&& obj, std::string_view method_name, ArgsTuple&&) {
-        constexpr auto ctx = std::meta::access_context::current();
-        template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^std::remove_cvref_t<T>, ctx))) {
-            if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
-                if (method_name == std::meta::identifier_of(m)) {
-                    if constexpr (std::meta::is_static_member(m)) {
-                        auto fn = &[:m:];
-                        if constexpr (std::is_invocable_v<decltype(fn)>) {
-                            return fn();
-                        }
-                    } else {
-                        auto pmf = &[:m:];
-                        if constexpr (std::is_invocable_v<decltype(pmf), T>) {
-                            return (std::forward<T>(obj).*pmf)();
-                        }
-                    }
-                }
-            }
-        }
-        throw std::runtime_error("method not found or argument mismatch");
-    }
-};
+// ============================================================
+// Example derived class
+// ============================================================
 
 class TestClass : public Invokable {
 public:
@@ -234,101 +243,72 @@ public:
     }
 
     double distance(double x1, double y1, double x2, double y2) {
-        return std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+        return std::sqrt((x2 - x1) * (x2 - x1) +
+                         (y2 - y1) * (y2 - y1));
     }
 
     std::string toString(double x, double y) {
         return std::to_string(x) + ", " + std::to_string(y);
     }
 
-    double distance_3d(double x1, double y1, double z1, double x2, double y2, double z2) {
-        return std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
+    static int mul(int a, int b) {
+        return a * b;
     }
 
-    template <typename Sig>
-    requires (std::tuple_size_v<typename function_traits<TestClass, Sig>::args_tuple> == 0)
-    decltype(auto) call_method(std::string_view method_name) {
-        using T = std::remove_reference_t<decltype(*this)>;
-        using traits = function_traits<T, Sig>;
-        using R = typename traits::return_type;
-        return call_method_impl_with_args<T, R>(*this, method_name);
-    }
-
-    template <typename Sig, typename... Args>
-    decltype(auto) call_method(std::string_view method_name, Args&&... args) {
-        using T = std::remove_reference_t<decltype(*this)>;
-        using traits = function_traits<T, Sig>;
-        using R = typename traits::return_type;
-        return call_method_impl_with_args<T, R, Args...>(*this, method_name, std::forward<Args>(args)...);
-    }
-
-    auto make_invoker(std::string_view method_name) {
-        return make_invoker_reflected(this, method_name);
-    }
-
-    template <typename Sig>
-    auto make_invoker(std::string_view method_name) {
-        return Invokable::make_invoker<TestClass, Sig>(this, method_name);
+    std::any invoke(std::string_view method_name,
+                    std::span<const std::any> args) override {
+        return invoke_reflected(*this, method_name, args);
     }
 };
 
+// ============================================================
+// Small helper for nicer call sites
+// ============================================================
+
+template <typename... Args>
+std::any invoke_dyn(Invokable* obj,
+                    std::string_view method_name,
+                    Args&&... args) {
+    std::vector<std::any> packed;
+    packed.reserve(sizeof...(Args));
+    (packed.emplace_back(std::forward<Args>(args)), ...);
+    return obj->invoke(method_name, packed);
+}
+
+// ============================================================
+// Demo
+// ============================================================
+
 int main() {
     TestClass tc;
+    Invokable* p = &tc;
 
-    // Original usage still works
-    auto typed_add = tc.make_invoker<int(int, int)>("add");
-    std::cout << "Typed add(5, 6): " << typed_add(5, 6) << "\n";
+    try {
+        std::cout << "add(5, 6) = "
+                  << std::any_cast<int>(invoke_dyn(p, "add", 5, 6))
+                  << "\n";
 
-    // Store reflected invokers in a map
-    using InvokerType = decltype(tc.make_invoker("add"));
-    std::map<std::string, InvokerType> invoker_map;
-    invoker_map.emplace("add", tc.make_invoker("add"));
-    invoker_map.emplace("distance", tc.make_invoker("distance"));
-    invoker_map.emplace("toString", tc.make_invoker("toString"));
-    invoker_map.emplace("distance_3d", tc.make_invoker("distance_3d"));
+        std::cout << "add(1, 2, 3) = "
+                  << std::any_cast<int>(invoke_dyn(p, "add", 1, 2, 3))
+                  << "\n";
 
-    // Use them from the map
-    std::cout << "\n=== Using stored invokers ===\n";
-    std::cout << "Map add(8, 9): " << std::any_cast<int>(invoker_map.at("add")(8, 9)) << "\n";
-    std::cout << "Map distance(0, 0, 3, 4): " << std::any_cast<double>(invoker_map.at("distance")(0.0, 0.0, 3.0, 4.0)) << "\n";
-    std::cout << "Map toString(1.5, 2.5): " << std::any_cast<std::string>(invoker_map.at("toString")(1.5, 2.5)) << "\n";
-    std::cout << "Map distance_3d(0, 0, 0, 1, 2, 2): " << std::any_cast<double>(invoker_map.at("distance_3d")(0, 0, 0, 1, 2, 2)) << "\n";
+        std::cout << "distance(0,0,3,4) = "
+                  << std::any_cast<double>(invoke_dyn(p, "distance",
+                                                      0.0, 0.0, 3.0, 4.0))
+                  << "\n";
 
-    // Alternative: store in std::vector with a wrapper
-    struct InvokerEntry {
-        std::string name;
-        std::function<std::any(int, int)> fn_2_int;
-        std::function<std::any(double, double, double, double)> fn_4_double;
-        int arg_count;
+        std::cout << "toString(1.5,2.5) = "
+                  << std::any_cast<std::string>(invoke_dyn(p, "toString",
+                                                           1.5, 2.5))
+                  << "\n";
 
-        InvokerEntry(std::string n, decltype(tc.make_invoker("add")) fn, int ac)
-            : name(std::move(n)), arg_count(ac) {
-            if (ac == 2) {
-                fn_2_int = [fn](int a, int b) { return fn(a, b); };
-            } else if (ac == 4) {
-                fn_4_double = [fn](double a, double b, double c, double d) { return fn(a, b, c, d); };
-            }
-        }
-    };
+        std::cout << "mul(6,7) = "
+                  << std::any_cast<int>(invoke_dyn(p, "mul", 6, 7))
+                  << "\n";
 
-    std::vector<InvokerEntry> invokers;
-    invokers.emplace_back("add", tc.make_invoker("add"), 2);
-    invokers.emplace_back("distance", tc.make_invoker("distance"), 4);
-
-    std::cout << "\n=== Using vector storage ===\n";
-    std::cout << "Vector add(10, 20): " << std::any_cast<int>(invokers[0].fn_2_int(10, 20)) << "\n";
-
-    // Best approach: Use the decltype directly in a map
-    std::cout << "\n=== Best approach: decltype in container ===\n";
-    std::unordered_map<std::string, InvokerType> best_map;
-
-    best_map.emplace("add", tc.make_invoker("add"));
-    best_map.emplace("distance", tc.make_invoker("distance"));
-    best_map.emplace("toString", tc.make_invoker("toString"));
-    best_map.emplace("distance_3d", tc.make_invoker("distance_3d"));
-
-    std::cout << "Best map add(100, 200): " << std::any_cast<int>(best_map.at("add")(100, 200)) << "\n";
-    std::cout << "Best map add(1, 2, 3): " << std::any_cast<int>(best_map.at("add")(1, 2, 3)) << "\n";
-
-    return 0;
+        invoke_dyn(p, "hello");
+    }
+    catch (const std::exception& e) {
+        std::cerr << "invoke error: " << e.what() << "\n";
+    }
 }
