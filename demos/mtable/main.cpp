@@ -319,10 +319,10 @@ std::any invoke_dyn(Invokable* obj,
 // ============================================================
 
 template<class C>
-std::vector<MethodEntry> get_method_table() {
+auto get_method_table() {
     constexpr auto ctx = std::meta::access_context::current();
 
-    std::vector<MethodEntry> table;
+    std::unordered_multimap<std::string_view, MethodEntry> table;
 
     template for (constexpr auto m :
         std::define_static_array(std::meta::members_of(^^C, ctx))) {
@@ -331,13 +331,13 @@ std::vector<MethodEntry> get_method_table() {
             if constexpr (std::meta::is_static_member(m)) {
                 auto fn = &[:m:];
                 auto entry = make_static_entry<C, decltype(fn)>(std::meta::identifier_of(m), fn);
-                table.push_back(entry);
+                table.insert({entry.name, entry});
             }
             // non-static member function
             else {
                 auto pmf = &[:m:];
                 auto entry = make_member_entry<C, decltype(pmf)>(std::meta::identifier_of(m), pmf);
-                table.push_back(entry);
+                table.insert({entry.name, entry});;
             }
         }
     }
@@ -358,8 +358,18 @@ int main() {
 
     auto mt = get_method_table<TestClass>();
     for (const auto& entry : mt) {
-        std::cout << "Method: " << entry.name << "\n";
+        std::cout << "Method: " << entry.first << "\n";
     }
+
+    auto d =  mt.find("distance");
+    if (d != mt.end()) {
+        std::cout << "Invoking distance via method table...\n";
+        auto result = d->second.invoke(p, {0.0, 0.0, 3.0, 4.0});
+        std::cout << "Result: " << std::any_cast<double>(result) << "\n";
+    } else {
+        std::cout << "Method 'distance' not found in method table\n";
+    }
+
     std::cout.flush();
 
     try {
