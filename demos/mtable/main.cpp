@@ -12,6 +12,11 @@
 #include <utility>
 #include <vector>
 
+struct MethodEntry {
+    std::string_view name;
+    std::function<std::any(void*, std::span<const std::any>)> invoke;
+};
+
 // ============================================================
 // Base runtime interface
 // ============================================================
@@ -123,6 +128,16 @@ std::any invoke_member_with_anys(C& obj,
         obj, pmf, args, std::make_index_sequence<N>{});
 }
 
+// Forward declarations for static/free functions
+template <class FN, class Tuple, std::size_t... I>
+std::any invoke_static_with_anys_impl(FN fn,
+                                      std::span<const std::any> args,
+                                      std::index_sequence<I...>);
+
+template <class FN>
+std::any invoke_static_with_anys(FN fn,
+                                 std::span<const std::any> args);
+
 // ============================================================
 // Invoke helpers for static/free functions
 // ============================================================
@@ -158,6 +173,29 @@ std::any invoke_static_with_anys(FN fn,
     return invoke_static_with_anys_impl<FN, Tuple>(
         fn, args, std::make_index_sequence<N>{});
 }
+
+template<class C, class PMF>
+MethodEntry make_member_entry(std::string_view name, PMF pmf)
+{
+    return MethodEntry{
+        name,
+        [pmf](void* obj, std::span<const std::any> args) -> std::any {
+            return invoke_member_with_anys(*static_cast<C*>(obj), pmf, args);
+        }
+    };
+}
+
+template<class C, class FN>
+MethodEntry make_static_entry(std::string_view name, FN fn)
+{
+    return MethodEntry{
+        name,
+        [fn]([[maybe_unused]] void* obj, std::span<const std::any> args) -> std::any {
+            return invoke_static_with_anys(fn, args);
+        }
+    };
+}
+
 
 // ============================================================
 // Reflection-based dispatcher
@@ -277,12 +315,52 @@ std::any invoke_dyn(Invokable* obj,
 }
 
 // ============================================================
+// Build method table at compile time
+// ============================================================
+
+template<class C>
+std::vector<MethodEntry> get_method_table() {
+    constexpr auto ctx = std::meta::access_context::current();
+
+    std::vector<MethodEntry> table;
+
+    template for (constexpr auto m :
+        std::define_static_array(std::meta::members_of(^^C, ctx))) {
+        if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
+            // static member function
+            if constexpr (std::meta::is_static_member(m)) {
+                auto fn = &[:m:];
+                auto entry = make_static_entry<C, decltype(fn)>(std::meta::identifier_of(m), fn);
+                table.push_back(entry);
+            }
+            // non-static member function
+            else {
+                auto pmf = &[:m:];
+                auto entry = make_member_entry<C, decltype(pmf)>(std::meta::identifier_of(m), pmf);
+                table.push_back(entry);
+            }
+        }
+    }
+    return table;
+}
+
+// ============================================================
 // Demo
 // ============================================================
 
 int main() {
+    std::cout << "Program started\n";
+    std::cout.flush();
+
     TestClass tc;
     Invokable* p = &tc;
+
+
+    auto mt = get_method_table<TestClass>();
+    for (const auto& entry : mt) {
+        std::cout << "Method: " << entry.name << "\n";
+    }
+    std::cout.flush();
 
     try {
         std::cout << "add(5, 6) = "
