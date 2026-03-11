@@ -20,6 +20,7 @@ struct MethodEntry {
     bool is_virtual = false;
     std::string_view return_type;
     size_t argcount = 0;
+    std::vector<std::string> arg_types;
 };
 
 // ============================================================
@@ -281,6 +282,10 @@ public:
         std::cout << "hello()\n";
     }
 
+    std::string concat(const std::string &a, const std::string &b) {
+        return a + ":" + b;
+    }
+
     int add(int a, int b) {
         return a + b;
     }
@@ -326,6 +331,39 @@ std::any invoke_dyn(Invokable* obj,
 // Build method table at compile time
 // ============================================================
 
+template <typename T>
+std::string_view type_name()
+{
+#if defined(__clang__) || defined(__GNUC__)
+    std::string_view name = __PRETTY_FUNCTION__;
+    auto start = name.find("T = ") + 4;
+    auto end = name.find(']', start);
+    return name.substr(start, end - start);
+#elif defined(_MSC_VER)
+    std::string_view name = __FUNCSIG__;
+    auto start = name.find("type_name<") + 10;
+    auto end = name.find(">(void)");
+    return name.substr(start, end - start);
+#endif
+}
+
+template<class Tuple, std::size_t... I>
+std::vector<std::string> arg_type_names_impl(std::index_sequence<I...>)
+{
+    std::vector<std::string> result;
+    result.reserve(sizeof...(I));
+    (result.emplace_back(type_name<std::tuple_element_t<I, Tuple>>()), ...);
+    return result;
+}
+
+template<class Tuple>
+std::vector<std::string> arg_type_names()
+{
+    return arg_type_names_impl<Tuple>(
+        std::make_index_sequence<std::tuple_size_v<Tuple>>{}
+    );
+}
+
 template<class C>
 auto get_method_table() {
     constexpr auto ctx = std::meta::access_context::current();
@@ -340,12 +378,15 @@ auto get_method_table() {
             using PMF = decltype(pmf);
             using traits = function_traits<PMF>;
             constexpr auto argcount = traits::arity;            
+            auto return_type = type_name<PMF>();
             if constexpr (std::meta::is_static_member(m)) {
                 MethodEntry entry = make_static_entry<C, PMF>(std::meta::identifier_of(m), pmf);
                 entry.is_static = true;
                 entry.is_virtual = false;
                 entry.is_const = false;
                 entry.argcount = argcount;
+                entry.return_type = return_type;
+                entry.arg_types = arg_type_names<typename traits::args_tuple>();
                 table.insert({entry.name, entry});
             }
             // non-static member function
@@ -363,7 +404,9 @@ auto get_method_table() {
                     entry.is_const = false;
                 }
                 entry.argcount = argcount;
-                table.insert({entry.name, entry});;
+                entry.return_type = return_type;
+                entry.arg_types = arg_type_names<typename traits::args_tuple>();
+                table.insert({entry.name, entry});
             }
             
         }
@@ -385,7 +428,11 @@ int main() {
 
     auto mt = get_method_table<TestClass>();
     for (const auto& entry : mt) {
-        std::cout << "Method: \"" << entry.first << "\", args count: " << entry.second.argcount << "\n";
+        std::cout << "Method: \"" << entry.first << "\", args count: " << entry.second.argcount << ", return type: " << entry.second.return_type << "\n";
+        for (const auto &t : entry.second.arg_types) {
+            std::cout << " " << t;
+        }
+        std::cout << "\n";
     }
 
     auto d =  mt.find("distance");
