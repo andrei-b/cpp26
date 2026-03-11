@@ -15,6 +15,11 @@
 struct MethodEntry {
     std::string_view name;
     std::function<std::any(void*, std::span<const std::any>)> invoke;
+    bool is_static = false;
+    bool is_const = false;
+    bool is_virtual = false;
+    std::string_view return_type;
+    size_t argcount = 0;
 };
 
 // ============================================================
@@ -43,6 +48,7 @@ struct function_traits<R (C::*)(Args...)> {
     using return_type = R;
     using args_tuple  = std::tuple<Args...>;
     static constexpr bool is_const = false;
+    static constexpr size_t arity = sizeof...(Args);
 };
 
 // const member function
@@ -52,6 +58,7 @@ struct function_traits<R (C::*)(Args...) const> {
     using return_type = R;
     using args_tuple  = std::tuple<Args...>;
     static constexpr bool is_const = true;
+    static constexpr size_t arity = sizeof...(Args);
 };
 
 // static/free function pointer
@@ -61,6 +68,7 @@ struct function_traits<R (*)(Args...)> {
     using return_type = R;
     using args_tuple  = std::tuple<Args...>;
     static constexpr bool is_const = false;
+    static constexpr size_t arity = sizeof...(Args);
 };
 
 // ============================================================
@@ -328,17 +336,36 @@ auto get_method_table() {
         std::define_static_array(std::meta::members_of(^^C, ctx))) {
         if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
             // static member function
+            auto pmf = &[:m:];
+            using PMF = decltype(pmf);
+            using traits = function_traits<PMF>;
+            constexpr auto argcount = traits::arity;            
             if constexpr (std::meta::is_static_member(m)) {
-                auto fn = &[:m:];
-                auto entry = make_static_entry<C, decltype(fn)>(std::meta::identifier_of(m), fn);
+                MethodEntry entry = make_static_entry<C, PMF>(std::meta::identifier_of(m), pmf);
+                entry.is_static = true;
+                entry.is_virtual = false;
+                entry.is_const = false;
+                entry.argcount = argcount;
                 table.insert({entry.name, entry});
             }
             // non-static member function
             else {
-                auto pmf = &[:m:];
-                auto entry = make_member_entry<C, decltype(pmf)>(std::meta::identifier_of(m), pmf);
+                MethodEntry entry = make_member_entry<C, PMF>(std::meta::identifier_of(m), pmf);
+                entry.is_static = false;
+                if constexpr (std::meta::is_virtual(m)) {
+                    entry.is_virtual = true;
+                } else {
+                    entry.is_virtual = false;
+                }
+                if constexpr (traits::is_const) {
+                    entry.is_const = true;
+                } else {
+                    entry.is_const = false;
+                }
+                entry.argcount = argcount;
                 table.insert({entry.name, entry});;
             }
+            
         }
     }
     return table;
@@ -358,7 +385,7 @@ int main() {
 
     auto mt = get_method_table<TestClass>();
     for (const auto& entry : mt) {
-        std::cout << "Method: " << entry.first << "\n";
+        std::cout << "Method: \"" << entry.first << "\", args count: " << entry.second.argcount << "\n";
     }
 
     auto d =  mt.find("distance");
