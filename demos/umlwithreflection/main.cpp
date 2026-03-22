@@ -6,9 +6,13 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QStringList>
+#include <QPen>
+#include <QBrush>
+#include <QPolygon>
 
 #include <algorithm>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "method_table.hpp"
@@ -60,33 +64,26 @@ static QString formatMethodLine(std::string_view name, const MethodEntry& entry)
 }
 
 template<typename T>
-static void appendReflectedMethods(QStringList& out)
+static QStringList reflectedMethodLines()
 {
+    QStringList lines;
     const auto table = get_method_table<T>();
+
     for (const auto& [name, entry] : table) {
-        out << formatMethodLine(name, entry);
+        lines << formatMethodLine(name, entry);
     }
+
+    lines.removeDuplicates();
+    std::sort(lines.begin(), lines.end());
+    return lines;
 }
 
-static QStringList collectAllQPushButtonMethods()
-{
-    QStringList methods;
-
-    appendReflectedMethods<QPushButton>(methods);
-    appendReflectedMethods<QAbstractButton>(methods);
-    appendReflectedMethods<QWidget>(methods);
-    appendReflectedMethods<QObject>(methods);
-
-    methods.removeDuplicates();
-    std::sort(methods.begin(), methods.end());
-    return methods;
-}
-
-static UmlClassInfo makeQPushButtonInfo()
+template<typename T>
+static UmlClassInfo makeClassInfo()
 {
     UmlClassInfo info;
-    info.className = "QPushButton";
-    info.methods = collectAllQPushButtonMethods();
+    info.className = QString::fromStdString(std::string(type_name<T>()));
+    info.methods = reflectedMethodLines<T>();
     return info;
 }
 
@@ -94,8 +91,13 @@ class UmlDiagramWidget : public QWidget
 {
 public:
     explicit UmlDiagramWidget(QWidget* parent = nullptr)
-        : QWidget(parent), m_info(makeQPushButtonInfo())
+        : QWidget(parent)
     {
+        m_classes.push_back(makeClassInfo<QPushButton>());
+        m_classes.push_back(makeClassInfo<QAbstractButton>());
+        m_classes.push_back(makeClassInfo<QWidget>());
+        m_classes.push_back(makeClassInfo<QObject>());
+
         layoutDiagram();
         setMinimumSize(m_totalSize);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -107,7 +109,12 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         p.fillRect(rect(), Qt::white);
-        drawClassBox(p, m_info);
+
+        drawInheritanceArrows(p);
+
+        for (const auto& cls : m_classes) {
+            drawClassBox(p, cls);
+        }
     }
 
 private:
@@ -124,27 +131,65 @@ private:
 
         constexpr int outerMargin = 24;
         constexpr int innerPad = 10;
+        constexpr int classSpacing = 80;
         constexpr int minWidth = 700;
-        constexpr int minMethodArea = 120;
 
-        int width = titleFm.horizontalAdvance(m_info.className);
-        for (const auto& line : m_info.methods) {
-            width = std::max(width, bodyFm.horizontalAdvance(line));
+        int y = outerMargin;
+        int maxWidth = 0;
+
+        for (auto& cls : m_classes) {
+            int width = titleFm.horizontalAdvance(cls.className);
+
+            for (const auto& line : cls.methods) {
+                width = std::max(width, bodyFm.horizontalAdvance(line));
+            }
+
+            width += 2 * innerPad + 20;
+            width = std::max(width, minWidth);
+
+            const int titleHeight = titleFm.height() + 2 * innerPad;
+
+            const int methodsHeight =
+                static_cast<int>(cls.methods.size()) * (bodyFm.height() + 4) + 2 * innerPad;
+
+            const int height = titleHeight + methodsHeight;
+
+            cls.rect = QRect(outerMargin, y, width, height);
+            y += height + classSpacing;
+            maxWidth = std::max(maxWidth, width);
         }
 
-        width += 2 * innerPad + 20;
-        width = std::max(width, minWidth);
+        for (auto& cls : m_classes) {
+            cls.rect.moveLeft(outerMargin + (maxWidth - cls.rect.width()) / 2);
+        }
 
-        const int titleHeight = titleFm.height() + 2 * innerPad;
-        const int methodsHeight = std::max(
-            minMethodArea,
-            static_cast<int>(m_info.methods.size()) * (bodyFm.height() + 4) + 2 * innerPad
-        );
+        m_totalSize = QSize(maxWidth + 2 * outerMargin, y);
+    }
 
-        const int height = titleHeight + methodsHeight;
+    void drawInheritanceArrows(QPainter& p)
+    {
+        p.setPen(QPen(Qt::black, 2));
+        p.setBrush(Qt::white);
 
-        m_info.rect = QRect(outerMargin, outerMargin, width, height);
-        m_totalSize = QSize(width + 2 * outerMargin, height + 2 * outerMargin);
+        for (int i = 0; i + 1 < static_cast<int>(m_classes.size()); ++i) {
+            const QRect& child = m_classes[i].rect;
+            const QRect& base  = m_classes[i + 1].rect;
+
+            const QPoint start(child.center().x(), child.bottom());
+            const QPoint end(base.center().x(), base.top());
+
+            p.drawLine(start, end);
+
+            const int aw = 16;
+            const int ah = 14;
+
+            QPolygon triangle;
+            triangle << QPoint(end.x(), end.y())
+                     << QPoint(end.x() - aw / 2, end.y() + ah)
+                     << QPoint(end.x() + aw / 2, end.y() + ah);
+
+            p.drawPolygon(triangle);
+        }
     }
 
     void drawClassBox(QPainter& p, const UmlClassInfo& cls)
@@ -165,6 +210,7 @@ private:
         p.drawRect(cls.rect);
 
         const int titleHeight = titleFm.height() + 2 * innerPad;
+
         QRect titleRect(cls.rect.left(), cls.rect.top(), cls.rect.width(), titleHeight);
         QRect methodsRect(cls.rect.left(),
                           cls.rect.top() + titleHeight,
@@ -179,14 +225,14 @@ private:
         p.setFont(bodyFont);
 
         int y = methodsRect.top() + innerPad + bodyFm.ascent();
+
         for (const auto& line : cls.methods) {
             p.drawText(methodsRect.left() + innerPad, y, line);
             y += bodyFm.height() + 4;
         }
     }
-
 private:
-    UmlClassInfo m_info;
+    std::vector<UmlClassInfo> m_classes;
     QSize m_totalSize;
 };
 
@@ -201,8 +247,8 @@ int main(int argc, char *argv[])
     scroll->setWidgetResizable(false);
 
     QWidget window;
-    window.setWindowTitle("UML - QPushButton methods from method_table");
-    window.resize(1400, 900);
+    window.setWindowTitle("UML Inheritance Diagram - QPushButton");
+    window.resize(1200, 900);
 
     auto* layout = new QVBoxLayout(&window);
     layout->addWidget(scroll);
