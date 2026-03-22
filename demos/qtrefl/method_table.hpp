@@ -13,12 +13,19 @@
 #include <utility>
 #include <vector>
 
+enum class AccessSpecifier {
+    Private,
+    Protected,
+    Public
+};
+
 struct MethodEntry {
     std::string_view name;
     std::function<std::any(void*, std::span<const std::any>)> invoke;
     bool is_static = false;
     bool is_const = false;
     bool is_virtual = false;
+    AccessSpecifier access = AccessSpecifier::Public;
     std::string_view pretty_name;
     size_t argcount = 0;
     std::vector<std::string> arg_types;
@@ -210,6 +217,9 @@ auto get_method_table() {
                 entry.argcount = argcount;
                 entry.pretty_name = return_type;
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
+                entry.access = std::meta::is_private(m) ? AccessSpecifier::Private :
+                               std::meta::is_protected(m) ? AccessSpecifier::Protected :
+                               AccessSpecifier::Public;
                 table.insert({entry.name, entry});
             } else {
                 MethodEntry entry = make_member_entry<C, PMF>(std::meta::identifier_of(m), pmf);
@@ -218,6 +228,10 @@ auto get_method_table() {
                 entry.is_const = traits::is_const;
                 entry.argcount = argcount;
                 entry.pretty_name = return_type;
+                entry.access = std::meta::is_private(m) ? AccessSpecifier::Private :
+                               std::meta::is_protected(m) ? AccessSpecifier::Protected :
+                               AccessSpecifier::Public;
+                table.insert({entry.name, entry});
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
                 table.insert({entry.name, entry});
             }
