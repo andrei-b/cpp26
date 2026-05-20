@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
     auto mte = mt.find("setFlat");
     if (mte != mt.end()) {
         qDebug() << "setFlat found in QPushButton method table";
-        qDebug() << mte->second.pretty_name; // should be "void QPushButton::setFlat(bool)"
+        qDebug() << QString::fromStdString(mte->second.pretty_name); // should be "void QPushButton::setFlat(bool)"
         mte->second.invoke(&button, { true }); // should call button.setFlat(false)
     } else {
         qDebug() << "setFlat NOT found in QPushButton method table";
