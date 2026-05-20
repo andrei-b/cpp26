@@ -1,59 +1,77 @@
 cmake_minimum_required(VERSION 3.28)
 
+# Set compiler BEFORE project()
+
 project(mtable LANGUAGES CXX)
 
-# Set the C++ compiler to use the clang26 build
-set(CMAKE_CXX_COMPILER /home/andrei/Desktop/clang26/build/bin/clang++)
 
-# Set build type to Debug if not specified
+set(CLANG21_ROOT /opt/clang-p2996/)
+
+set(CMAKE_BUILD_RPATH
+        "${CLANG21_ROOT}/lib"
+        "${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu"
+)
+
+set(CMAKE_INSTALL_RPATH
+        "${CLANG21_ROOT}/lib"
+        "${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu"
+)
+# Default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-# Ensure debug symbols are always included
+# Build flags
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
+# Disable modules scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
-# ---- Require C++2c (C++26 draft) ----
+
+# C++26
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ---- Create executable ----
+# Executable
 add_executable(mtable main.cpp)
 
-
-target_include_directories(mtable PRIVATE
-        /home/andrei/Desktop/clang26/build/include/c++/v1
-        /home/andrei/Desktop/clang26/build/include/x86_64-unknown-linux-gnu/c++/v1
-)
-
+# libc++ includes
 target_link_directories(mtable PRIVATE
-        /home/andrei/Desktop/clang26/build/lib/x86_64-unknown-linux-gnu
+        ${CLANG21_ROOT}/lib
+        ${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu
 )
 
-# link libc++ runtime
+target_link_options(mtable PRIVATE
+        -stdlib=libc++
+        "-Wl,-rpath,${CLANG21_ROOT}/lib"
+        "-Wl,-rpath,${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu"
+)
+# Library search paths
+target_link_directories(mtable PRIVATE
+        ${CLANG21_ROOT}1/lib
+        ${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu
+)
+
+# Compile flags
+target_compile_options(mtable PRIVATE
+        -std=c++2c
+        -stdlib=libc++
+        -freflection
+        -fexpansion-statements
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
+# Link flags
+target_link_options(mtable PRIVATE
+        -stdlib=libc++
+)
+
+# libc++ runtime
 target_link_libraries(mtable PRIVATE
         c++
         c++abi
         unwind
 )
-
-
-# ---- Extra warnings (recommended) ----
-target_compile_options(mtable PRIVATE
-        -std=c++2c
-        -freflection
-        -fexpansion-statements
-        -Wall -Wextra -Wpedantic
-        -stdlib=libc++
-)
-
-target_link_options(mtable PRIVATE
-        -Wl,-rpath,/home/andrei/Desktop/clang26/build/lib/x86_64-unknown-linux-gnu
-)
-
-# ---- Optional: print compiler info ----
-message(STATUS "Compiler: ${CMAKE_CXX_COMPILER}")
-message(STATUS "Compiler version: ${CMAKE_CXX_COMPILER_VERSION}")

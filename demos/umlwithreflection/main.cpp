@@ -9,6 +9,11 @@
 #include <QPen>
 #include <QBrush>
 #include <QPolygon>
+#include <QImage>
+#include <QCommandLineParser>
+#include <QCommandLineOption>
+#include <QStandardPaths>
+#include <cstdlib>
 
 #include <algorithm>
 #include <string>
@@ -99,9 +104,20 @@ public:
         m_classes.push_back(makeClassInfo<QObject>());
 
         layoutDiagram();
+        // Do NOT call setMinimumSize here – it triggers propagateSizeHints()
+        // on the platform window, which the offscreen/minimal plugins don't
+        // support and prints a noisy warning. Call applyWindowConstraints()
+        // only when a real display is available.
+    }
+
+    // Call this only when about to show a real window.
+    void applyWindowConstraints()
+    {
         setMinimumSize(m_totalSize);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     }
+
+    QSize totalSize() const { return m_totalSize; }
 
 protected:
     void paintEvent(QPaintEvent*) override
@@ -236,11 +252,53 @@ private:
     QSize m_totalSize;
 };
 
+static bool hasDisplay()
+{
+    return std::getenv("DISPLAY") != nullptr
+        || std::getenv("WAYLAND_DISPLAY") != nullptr;
+}
+
+static int exportDiagram(UmlDiagramWidget* diagram, const QString& outPath)
+{
+    const QSize sz = diagram->totalSize();
+    // Give the widget a proper size so render() has something to paint.
+    diagram->resize(sz);
+    QImage img(sz, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::white);
+    diagram->render(&img);   // render(QPaintDevice*) — no QPainter needed
+    if (img.save(outPath)) {
+        qInfo("Diagram saved to %s (%dx%d)", qPrintable(outPath), sz.width(), sz.height());
+        return 0;
+    }
+    qCritical("Failed to save image to %s", qPrintable(outPath));
+    return 1;
+}
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
+    QCommandLineParser parser;
+    parser.addHelpOption();
+    QCommandLineOption exportOpt({"e", "export"},
+        "Export diagram to PNG file instead of showing a window.", "file");
+    parser.addOption(exportOpt);
+    parser.process(app);
+
     auto* diagram = new UmlDiagramWidget;
+
+    // If an explicit export path was given, or no display is available, render to PNG.
+    if (parser.isSet(exportOpt)) {
+        return exportDiagram(diagram, parser.value(exportOpt));
+    }
+
+    if (!hasDisplay()) {
+        const QString defaultOut =
+            QStandardPaths::writableLocation(QStandardPaths::HomeLocation)
+            + "/uml_diagram.png";
+        qInfo("No display detected – exporting diagram to %s", qPrintable(defaultOut));
+        return exportDiagram(diagram, defaultOut);
+    }
 
     auto* scroll = new QScrollArea;
     scroll->setWidget(diagram);
@@ -249,6 +307,8 @@ int main(int argc, char *argv[])
     QWidget window;
     window.setWindowTitle("UML Inheritance Diagram - QPushButton");
     window.resize(1200, 900);
+
+    diagram->applyWindowConstraints();
 
     auto* layout = new QVBoxLayout(&window);
     layout->addWidget(scroll);

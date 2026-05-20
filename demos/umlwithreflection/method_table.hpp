@@ -24,6 +24,7 @@ struct MethodEntry {
     std::size_t argcount = 0;
     std::vector<std::string> arg_types;
     AccessSpecifier access = AccessSpecifier::Unknown;
+    std::string return_type;
 };
 
 template <typename T>
@@ -129,9 +130,12 @@ auto get_method_table()
                 entry.pretty_name = std::string(std::meta::display_string_of(m));
                 entry.is_static = std::meta::is_static_member(m);
                 entry.is_virtual = !entry.is_static && std::meta::is_virtual(m);
-                entry.is_const = traits::is_const;
+                entry.is_const = std::meta::is_const(m);
                 entry.is_noexcept = traits::is_noexcept;
-                entry.argcount = traits::arity;
+                entry.return_type = std::meta::display_string_of(std::meta::return_type_of(m));
+                entry.argcount = []() consteval -> std::size_t {
+                    return std::meta::parameters_of(m).size();
+                }();
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
 
                 if constexpr (std::meta::is_public(m)) {
