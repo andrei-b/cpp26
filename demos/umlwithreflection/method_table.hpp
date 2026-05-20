@@ -133,10 +133,13 @@ auto get_method_table()
                 entry.is_const = std::meta::is_const(m);
                 entry.is_noexcept = traits::is_noexcept;
                 entry.return_type = std::meta::display_string_of(std::meta::return_type_of(m));
-                entry.argcount = []() consteval -> std::size_t {
-                    return std::meta::parameters_of(m).size();
-                }();
-                entry.arg_types = arg_type_names<typename traits::args_tuple>();
+                entry.arg_types.clear();
+                template for (constexpr auto p : std::define_static_array(std::meta::parameters_of(m))) {
+                    entry.arg_types.emplace_back(
+                        std::meta::display_string_of(std::meta::type_of(p))
+                    );
+                }
+                entry.argcount = entry.arg_types.size();
 
                 if constexpr (std::meta::is_public(m)) {
                     entry.access = AccessSpecifier::Public;
