@@ -13,6 +13,32 @@
 #include <utility>
 #include <vector>
 
+struct MethodArgument {
+    std::string name;
+    std::string type;
+    std::string bare_type;
+
+    bool is_const = false;
+    bool is_volatile = false;
+
+    bool is_lvalue_reference = false;
+    bool is_rvalue_reference = false;
+
+    bool is_pointer = false;
+    bool is_pointer_to_const = false;
+    bool is_const_pointer = false;
+
+    bool is_array = false;
+
+    bool is_signed = false;
+    bool is_unsigned = false;
+    bool is_integral = false;
+    bool is_floating_point = false;
+
+    bool is_enum = false;
+    bool is_class = false;
+};
+
 struct MethodEntry {
     std::string_view name;
     std::function<std::any(void*, std::span<const std::any>)> invoke;
@@ -22,6 +48,7 @@ struct MethodEntry {
     std::string_view pretty_name;
     size_t argcount = 0;
     std::vector<std::string> arg_types;
+    std::vector<MethodArgument> args;
 };
 
 // Function traits for member/static function pointers.
@@ -175,6 +202,73 @@ std::string_view type_name() {
 #endif
 }
 
+template <typename T>
+MethodArgument make_argument_info(std::string name = {}) {
+    using RawT = T;
+    using NoRefT = std::remove_reference_t<RawT>;
+    using NoCvRefT = std::remove_cvref_t<RawT>;
+
+    MethodArgument arg{};
+    arg.name = std::move(name);
+    arg.type = std::string(type_name<RawT>());
+    arg.bare_type = std::string(type_name<NoCvRefT>());
+
+    arg.is_const = std::is_const_v<NoRefT>;
+    arg.is_volatile = std::is_volatile_v<NoRefT>;
+
+    arg.is_lvalue_reference = std::is_lvalue_reference_v<RawT>;
+    arg.is_rvalue_reference = std::is_rvalue_reference_v<RawT>;
+
+    arg.is_pointer = std::is_pointer_v<NoCvRefT>;
+
+    if constexpr (std::is_pointer_v<NoCvRefT>) {
+        using PointeeT = std::remove_pointer_t<NoCvRefT>;
+
+        arg.is_pointer_to_const = std::is_const_v<PointeeT>;
+        arg.is_const_pointer = std::is_const_v<NoRefT>;
+    }
+
+    arg.is_array = std::is_array_v<NoCvRefT>;
+
+    arg.is_signed = std::is_signed_v<NoCvRefT>;
+    arg.is_unsigned = std::is_unsigned_v<NoCvRefT>;
+    arg.is_integral = std::is_integral_v<NoCvRefT>;
+    arg.is_floating_point = std::is_floating_point_v<NoCvRefT>;
+
+    arg.is_enum = std::is_enum_v<NoCvRefT>;
+    arg.is_class = std::is_class_v<NoCvRefT>;
+
+    return arg;
+}
+
+template <class Tuple, std::size_t... I>
+std::vector<MethodArgument> arg_infos_impl(std::index_sequence<I...>) {
+    std::vector<MethodArgument> result;
+    result.reserve(sizeof...(I));
+    (result.emplace_back(make_argument_info<std::tuple_element_t<I, Tuple>>()), ...);
+    return result;
+}
+
+template <class Tuple>
+std::vector<MethodArgument> arg_infos() {
+    return arg_infos_impl<Tuple>(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+}
+
+template <auto function_meta, class Entry>
+void fill_argument_names_from_meta(Entry& entry) {
+    std::size_t index = 0;
+
+    template for (constexpr auto p : std::define_static_array(std::meta::parameters_of(function_meta))) {
+        if constexpr (std::meta::has_identifier(p)) {
+            if (index < entry.args.size()) {
+                entry.args[index].name = std::string(std::meta::identifier_of(p));
+            }
+        }
+
+        ++index;
+    }
+}
+
 template <class Tuple, std::size_t... I>
 std::vector<std::string> arg_type_names_impl(std::index_sequence<I...>) {
     std::vector<std::string> result;
@@ -210,6 +304,8 @@ auto get_method_table() {
                 entry.argcount = argcount;
                 entry.pretty_name = return_type;
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
+                entry.args = arg_infos<typename traits::args_tuple>();
+                fill_argument_names_from_meta<m>(entry);
                 table.insert({entry.name, entry});
             } else {
                 MethodEntry entry = make_member_entry<C, PMF>(std::meta::identifier_of(m), pmf);
@@ -219,6 +315,8 @@ auto get_method_table() {
                 entry.argcount = argcount;
                 entry.pretty_name = return_type;
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
+                entry.args = arg_infos<typename traits::args_tuple>();
+                fill_argument_names_from_meta<m>(entry);
                 table.insert({entry.name, entry});
             }
         }

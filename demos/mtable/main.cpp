@@ -66,6 +66,51 @@ int main() {
             std::cout << " " << t;
         }
         std::cout << "\n";
+
+        // Display MethodArgument metadata
+        if (!entry.second.args.empty()) {
+            std::cout << "  Arguments:\n";
+            for (size_t i = 0; i < entry.second.args.size(); ++i) {
+                const auto& arg = entry.second.args[i];
+                std::cout << "    [" << i << "] ";
+
+                // Parameter name (from reflection)
+                if (!arg.name.empty()) {
+                    std::cout << "name=" << arg.name;
+                } else {
+                    std::cout << "name=<unnamed>";
+                }
+                std::cout << ", type=" << arg.type << ", bare_type=" << arg.bare_type;
+
+                // Qualifiers
+                std::string quals;
+                if (arg.is_const) quals += "const ";
+                if (arg.is_volatile) quals += "volatile ";
+                if (arg.is_lvalue_reference) quals += "lvalue_ref ";
+                if (arg.is_rvalue_reference) quals += "rvalue_ref ";
+                if (arg.is_pointer) quals += "pointer ";
+                if (arg.is_pointer_to_const) quals += "ptr_to_const ";
+                if (arg.is_const_pointer) quals += "const_ptr ";
+                if (arg.is_array) quals += "array ";
+                if (!quals.empty()) {
+                    std::cout << " [" << quals << "]";
+                }
+
+                // Type category
+                std::string category;
+                if (arg.is_enum) category += "enum ";
+                if (arg.is_class) category += "class ";
+                if (arg.is_integral) category += "integral ";
+                if (arg.is_floating_point) category += "floating_point ";
+                if (arg.is_signed) category += "signed ";
+                if (arg.is_unsigned) category += "unsigned ";
+                if (!category.empty()) {
+                    std::cout << " <" << category << ">";
+                }
+
+                std::cout << "\n";
+            }
+        }
     }
 
     auto d =  mt.find("distance");
