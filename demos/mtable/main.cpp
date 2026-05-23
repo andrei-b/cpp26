@@ -111,6 +111,42 @@ int main() {
                 std::cout << "\n";
             }
         }
+
+        // Display return type metadata
+        {
+            const auto& ret = entry.second.return_type;
+            std::cout << "  Return Type:\n";
+            std::cout << "    type=" << ret.type << ", bare_type=" << ret.bare_type;
+
+            // Qualifiers
+            std::string quals;
+            if (ret.is_const) quals += "const ";
+            if (ret.is_volatile) quals += "volatile ";
+            if (ret.is_lvalue_reference) quals += "lvalue_ref ";
+            if (ret.is_rvalue_reference) quals += "rvalue_ref ";
+            if (ret.is_pointer) quals += "pointer ";
+            if (ret.is_pointer_to_const) quals += "ptr_to_const ";
+            if (ret.is_const_pointer) quals += "const_ptr ";
+            if (ret.is_array) quals += "array ";
+            if (!quals.empty()) {
+                std::cout << " [" << quals << "]";
+            }
+
+            // Type category
+            std::string category;
+            if (ret.is_void) category += "void ";
+            if (ret.is_enum) category += "enum ";
+            if (ret.is_class) category += "class ";
+            if (ret.is_integral) category += "integral ";
+            if (ret.is_floating_point) category += "floating_point ";
+            if (ret.is_signed) category += "signed ";
+            if (ret.is_unsigned) category += "unsigned ";
+            if (!category.empty()) {
+                std::cout << " <" << category << ">";
+            }
+
+            std::cout << "\n";
+        }
     }
 
     auto d =  mt.find("distance");
