@@ -45,6 +45,13 @@ public:
                     std::span<const std::any> args) override {
         return invoke_reflected(*this, method_name, args);
     }
+    void use_private() {
+        some_private_method(0);
+    }
+    private:
+    void some_private_method(int x) {
+        std::cout << "some_private_method(" << x << ")\n";
+    }
 };
 
 // ============================================================
@@ -61,7 +68,11 @@ int main() {
 
     auto mt = get_method_table<TestClass>();
     for (const auto& entry : mt) {
-        std::cout << "Method: \"" << entry.first << "\", args count: " << entry.second.argcount << ", return type: " << entry.second.pretty_name << "\n";
+        std::cout << "Method: \"" << entry.first
+                  << "\", args count: " << entry.second.arg_count
+                  << ", return type: " << entry.second.pretty_name
+                  << ", has pointer: " << std::boolalpha << entry.second.function_pointer.has_value()
+                  << "\n";
         for (const auto &t : entry.second.arg_types) {
             std::cout << " " << t;
         }
@@ -154,6 +165,15 @@ int main() {
         std::cout << "Invoking distance via method table...\n";
         auto result = d->second.invoke(p, {0.0, 0.0, 3.0, 4.0});
         std::cout << "Result: " << std::any_cast<double>(result) << "\n";
+
+        // Demonstrate typed pointer extraction helper
+        try {
+            using DistancePtr = double (TestClass::*)(double, double, double, double);
+            auto pmf = get_function_pointer<DistancePtr>(d->second);
+            std::cout << "Successfully extracted typed pointer for distance method\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Error extracting pointer: " << e.what() << "\n";
+        }
     } else {
         std::cout << "Method 'distance' not found in method table\n";
     }

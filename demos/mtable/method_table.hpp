@@ -72,10 +72,11 @@ struct MethodEntry {
     bool is_const = false;
     bool is_virtual = false;
     std::string_view pretty_name;
-    size_t argcount = 0;
+    size_t arg_count = 0;
     std::vector<std::string> arg_types;
     std::vector<MethodArgument> args;
     MethodReturnType return_type;
+    std::any function_pointer;
 };
 
 // Function traits for member/static function pointers.
@@ -197,6 +198,7 @@ template <class C, class PMF>
 MethodEntry make_member_entry(std::string_view name, PMF pmf) {
     MethodEntry entry{};
     entry.name = name;
+    entry.function_pointer = pmf;
     entry.invoke = [pmf](void* obj, std::span<const std::any> args) -> std::any {
         return invoke_member_with_anys(*static_cast<C*>(obj), pmf, args);
     };
@@ -208,6 +210,7 @@ template <class C, class FN>
 MethodEntry make_static_entry(std::string_view name, FN fn) {
     MethodEntry entry{};
     entry.name = name;
+    entry.function_pointer = fn;
     entry.invoke = [fn]([[maybe_unused]] void* obj, std::span<const std::any> args) -> std::any {
         return invoke_static_with_anys(fn, args);
     };
@@ -379,6 +382,19 @@ constexpr size_t get_parameter_count() {
     return count;
 }
 
+// Helper to extract a typed function pointer from MethodEntry
+template <typename FuncPtr>
+FuncPtr get_function_pointer(const MethodEntry& entry) {
+    if (!entry.function_pointer.has_value()) {
+        throw std::runtime_error("MethodEntry has no function pointer");
+    }
+    try {
+        return std::any_cast<FuncPtr>(entry.function_pointer);
+    } catch (const std::bad_any_cast&) {
+        throw std::runtime_error("Function pointer type mismatch");
+    }
+}
+
 template <class C>
 auto get_method_table() {
     constexpr auto ctx = std::meta::access_context::current();
@@ -398,7 +414,7 @@ auto get_method_table() {
                 entry.is_static = true;
                 entry.is_virtual = false;
                 entry.is_const = false;
-                entry.argcount = argcount;
+                entry.arg_count = argcount;
                 entry.pretty_name = return_type;
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
                 entry.args = arg_infos<typename traits::args_tuple>();
@@ -410,7 +426,7 @@ auto get_method_table() {
                 entry.is_static = false;
                 entry.is_virtual = std::meta::is_virtual(m);
                 entry.is_const = traits::is_const;
-                entry.argcount = argcount;
+                entry.arg_count = argcount;
                 entry.pretty_name = return_type;
                 entry.arg_types = arg_type_names<typename traits::args_tuple>();
                 entry.args = arg_infos<typename traits::args_tuple>();
@@ -423,4 +439,3 @@ auto get_method_table() {
 
     return table;
 }
-
