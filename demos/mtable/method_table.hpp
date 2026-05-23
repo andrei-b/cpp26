@@ -191,8 +191,8 @@ template <typename T>
 std::string_view type_name() {
 #if defined(__clang__) || defined(__GNUC__)
     std::string_view name = __PRETTY_FUNCTION__;
-    auto start = name.find("T = ") + 4;
-    auto end = name.find(']', start);
+    const auto start = name.find("T = ") + 4;
+    const auto end = name.find(']', start);
     return name.substr(start, end - start);
 #elif defined(_MSC_VER)
     std::string_view name = __FUNCSIG__;
@@ -282,6 +282,15 @@ std::vector<std::string> arg_type_names() {
     return arg_type_names_impl<Tuple>(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 }
 
+template <auto function_meta>
+constexpr size_t get_parameter_count() {
+    size_t count = 0;
+    template for (constexpr auto p : std::define_static_array(std::meta::parameters_of(function_meta))) {
+        ++count;
+    }
+    return count;
+}
+
 template <class C>
 auto get_method_table() {
     constexpr auto ctx = std::meta::access_context::current();
@@ -293,7 +302,7 @@ auto get_method_table() {
             auto pmf = &[:m:];
             using PMF = decltype(pmf);
             using traits = function_traits<PMF>;
-            constexpr auto argcount = traits::arity;
+            constexpr auto argcount = get_parameter_count<m>();
             auto return_type = type_name<PMF>();
 
             if constexpr (std::meta::is_static_member(m)) {
