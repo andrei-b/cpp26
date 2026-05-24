@@ -68,6 +68,7 @@ struct MethodReturnType {
 struct MethodEntry {
     std::string_view name;
     std::function<std::any(void*, std::span<const std::any>)> invoke;
+    std::function<void(void*, void*)> direct_invoke;
     bool is_accessible_from_current = true;
     bool is_static = false;
     bool is_const = false;
@@ -150,6 +151,24 @@ std::any invoke_member_with_anys_impl(C& obj,
     }
 }
 
+template <class C, class PMF, class Tuple, std::size_t... I>
+void invoke_member_direct_impl(C& obj,
+                               PMF pmf,
+                               Tuple& args,
+                               std::index_sequence<I...>) {
+    std::invoke(pmf, obj, std::get<I>(args)...);
+}
+
+template <class C, class PMF>
+void invoke_member_direct(C& obj, PMF pmf, void* args_ptr) {
+    using traits = function_traits<PMF>;
+    using Tuple = typename traits::args_tuple;
+    constexpr std::size_t N = std::tuple_size_v<Tuple>;
+
+    auto& args = *static_cast<Tuple*>(args_ptr);
+    invoke_member_direct_impl<C, PMF, Tuple>(obj, pmf, args, std::make_index_sequence<N>{});
+}
+
 template <class C, class PMF>
 std::any invoke_member_with_anys(C& obj,
                                  PMF pmf,
@@ -180,6 +199,23 @@ std::any invoke_static_with_anys_impl(FN fn,
     }
 }
 
+template <class FN, class Tuple, std::size_t... I>
+void invoke_static_direct_impl(FN fn,
+                               Tuple& args,
+                               std::index_sequence<I...>) {
+    std::invoke(fn, std::get<I>(args)...);
+}
+
+template <class FN>
+void invoke_static_direct(FN fn, void* args_ptr) {
+    using traits = function_traits<FN>;
+    using Tuple = typename traits::args_tuple;
+    constexpr std::size_t N = std::tuple_size_v<Tuple>;
+
+    auto& args = *static_cast<Tuple*>(args_ptr);
+    invoke_static_direct_impl<FN, Tuple>(fn, args, std::make_index_sequence<N>{});
+}
+
 template <class FN>
 std::any invoke_static_with_anys(FN fn,
                                  std::span<const std::any> args) {
@@ -203,6 +239,9 @@ MethodEntry make_member_entry(std::string_view name, PMF pmf) {
     entry.invoke = [pmf](void* obj, std::span<const std::any> args) -> std::any {
         return invoke_member_with_anys(*static_cast<C*>(obj), pmf, args);
     };
+    entry.direct_invoke = [pmf](void* obj, void* args) {
+        invoke_member_direct(*static_cast<C*>(obj), pmf, args);
+    };
     return entry;
 }
 
@@ -214,6 +253,9 @@ MethodEntry make_static_entry(std::string_view name, FN fn) {
     entry.function_pointer = fn;
     entry.invoke = [fn]([[maybe_unused]] void* obj, std::span<const std::any> args) -> std::any {
         return invoke_static_with_anys(fn, args);
+    };
+    entry.direct_invoke = [fn]([[maybe_unused]] void* obj, void* args) {
+        invoke_static_direct(fn, args);
     };
     return entry;
 }

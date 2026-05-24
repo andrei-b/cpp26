@@ -16,7 +16,8 @@ set(CMAKE_INSTALL_RPATH
         "${CLANG21_ROOT}/lib/x86_64-unknown-linux-gnu"
 )
 
-add_executable(pipeline src/main.cpp)
+add_executable(pipeline src/main.cpp
+        include/i_calling_queue.h)
 
 target_include_directories(pipeline PRIVATE
         ${CLANG21_ROOT}/include/c++/v1
