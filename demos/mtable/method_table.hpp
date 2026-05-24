@@ -68,6 +68,7 @@ struct MethodReturnType {
 struct MethodEntry {
     std::string_view name;
     std::function<std::any(void*, std::span<const std::any>)> invoke;
+    bool is_accessible_from_current = true;
     bool is_static = false;
     bool is_const = false;
     bool is_virtual = false;
@@ -422,12 +423,13 @@ make_static_pointer_type_t<R, Args...> get_static_function_pointer(const MethodE
 
 template <class C>
 auto get_method_table() {
-    constexpr auto ctx = std::meta::access_context::current();
+    constexpr auto ctx = std::meta::access_context::unchecked();
 
     std::unordered_multimap<std::string_view, MethodEntry> table;
 
     template for (constexpr auto m : std::define_static_array(std::meta::members_of(^^C, ctx))) {
         if constexpr (std::meta::is_function(m) && std::meta::has_identifier(m)) {
+            constexpr bool accessible_from_current = std::meta::is_accessible(m, std::meta::access_context::current());
             auto pmf = &[:m:];
             using PMF = decltype(pmf);
             using traits = function_traits<PMF>;
@@ -436,6 +438,7 @@ auto get_method_table() {
 
             if constexpr (std::meta::is_static_member(m)) {
                 MethodEntry entry = make_static_entry<C, PMF>(std::meta::identifier_of(m), pmf);
+                entry.is_accessible_from_current = accessible_from_current;
                 entry.is_static = true;
                 entry.is_virtual = false;
                 entry.is_const = false;
@@ -448,6 +451,7 @@ auto get_method_table() {
                 table.insert({entry.name, entry});
              } else {
                 MethodEntry entry = make_member_entry<C, PMF>(std::meta::identifier_of(m), pmf);
+                entry.is_accessible_from_current = accessible_from_current;
                 entry.is_static = false;
                 entry.is_virtual = std::meta::is_virtual(m);
                 entry.is_const = traits::is_const;

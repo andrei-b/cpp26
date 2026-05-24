@@ -111,7 +111,8 @@ int main() {
 
     for (const auto& entry : mt) {
         std::cout << "Method: \"" << entry.first
-                  << "\", args count: " << entry.second.arg_count
+                  << "\" [" << (entry.second.is_accessible_from_current ? "publicly accessible" : "non-public") << "]"
+                  << ", args count: " << entry.second.arg_count
                   << ", return type: " << entry.second.pretty_name
                   << ", has pointer: " << std::boolalpha << entry.second.function_pointer.has_value()
                   << "\n";
