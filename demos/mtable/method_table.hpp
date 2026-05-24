@@ -395,6 +395,31 @@ FuncPtr get_function_pointer(const MethodEntry& entry) {
     }
 }
 
+// Pointer type builders to avoid repeating raw pointer syntax.
+template <class C, typename R, typename... Args>
+using make_member_pointer_type_t = R (C::*)(Args...);
+
+template <class C, typename R, typename... Args>
+using make_const_member_pointer_type_t = R (C::*)(Args...) const;
+
+template <typename R, typename... Args>
+using make_static_pointer_type_t = R (*)(Args...);
+
+template <class C, typename R, typename... Args>
+make_member_pointer_type_t<C, R, Args...> get_member_function_pointer(const MethodEntry& entry) {
+    return get_function_pointer<make_member_pointer_type_t<C, R, Args...>>(entry);
+}
+
+template <class C, typename R, typename... Args>
+make_const_member_pointer_type_t<C, R, Args...> get_const_member_function_pointer(const MethodEntry& entry) {
+    return get_function_pointer<make_const_member_pointer_type_t<C, R, Args...>>(entry);
+}
+
+template <typename R, typename... Args>
+make_static_pointer_type_t<R, Args...> get_static_function_pointer(const MethodEntry& entry) {
+    return get_function_pointer<make_static_pointer_type_t<R, Args...>>(entry);
+}
+
 template <class C>
 auto get_method_table() {
     constexpr auto ctx = std::meta::access_context::current();

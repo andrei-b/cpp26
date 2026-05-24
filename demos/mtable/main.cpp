@@ -67,6 +67,48 @@ int main() {
 
 
     auto mt = get_method_table<TestClass>();
+
+    // Lightweight runtime tests for reflection table and pointer helpers.
+    auto expect = [](bool condition, std::string_view message) {
+        if (!condition) {
+            throw std::runtime_error(std::string("test failed: ") + std::string(message));
+        }
+    };
+
+    {
+        expect(!mt.empty(), "method table is not empty");
+
+        for (const auto& entry : mt) {
+            expect(entry.second.function_pointer.has_value(), "function pointer is populated");
+        }
+
+        auto distance_it = mt.find("distance");
+        expect(distance_it != mt.end(), "distance method exists");
+        expect(distance_it->second.arg_count == 4, "distance has 4 arguments");
+        expect(distance_it->second.return_type.is_floating_point, "distance returns floating-point");
+
+        using DistancePtr = make_member_pointer_type_t<TestClass, double, double, double, double, double>;
+        DistancePtr distance_ptr = get_member_function_pointer<TestClass, double, double, double, double, double>(distance_it->second);
+        double distance_value = (tc.*distance_ptr)(0.0, 0.0, 3.0, 4.0);
+        expect(std::abs(distance_value - 5.0) < 1e-12, "distance pointer invocation returns 5");
+
+        auto mul_it = mt.find("mul");
+        expect(mul_it != mt.end(), "mul method exists");
+        auto mul_ptr = get_static_function_pointer<int, int, int>(mul_it->second);
+        expect(mul_ptr(6, 7) == 42, "mul pointer invocation returns 42");
+
+        auto add_range = mt.equal_range("add");
+        bool saw_add2 = false;
+        bool saw_add3 = false;
+        for (auto it = add_range.first; it != add_range.second; ++it) {
+            saw_add2 = saw_add2 || (it->second.arg_count == 2);
+            saw_add3 = saw_add3 || (it->second.arg_count == 3);
+        }
+        expect(saw_add2 && saw_add3, "add overloads with 2 and 3 args are present");
+
+        std::cout << "[tests] all runtime checks passed\n";
+    }
+
     for (const auto& entry : mt) {
         std::cout << "Method: \"" << entry.first
                   << "\", args count: " << entry.second.arg_count
