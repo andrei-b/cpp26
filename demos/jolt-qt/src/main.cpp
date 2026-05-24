@@ -45,7 +45,7 @@ namespace BroadPhaseLayers {
     static constexpr JPH::uint NUM_LAYERS = 2;
 }
 
-class BroadPhaseLayerInterface final : public JPH::BroadPhaseLayerInterface {
+class BroadPhaseLayerInterface : public JPH::BroadPhaseLayerInterface {
 public:
     JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::NUM_LAYERS; }
 
