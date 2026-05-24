@@ -5,6 +5,7 @@
 
 #include "invokable.hpp"
 #include "method_table.hpp"
+#include "signal_slot.hpp"
 
 // ============================================================
 // Example derived class
@@ -51,6 +52,38 @@ public:
     private:
     void some_private_method(int x) {
         std::cout << "some_private_method(" << x << ")\n";
+    }
+};
+
+class UiSignals {
+public:
+    Signal<> clicked;
+    Signal<int, int> add_requested;
+    Signal<int> secret_requested;
+
+    void fire_demo_events() {
+        clicked.emit();
+        add_requested.emit(10, 32);
+        secret_requested.emit(99);
+    }
+};
+
+class Dashboard {
+public:
+    int click_count = 0;
+    int last_sum = 0;
+    int last_secret = 0;
+
+    void on_clicked() {
+        ++click_count;
+    }
+
+    void on_add_requested(int a, int b) {
+        last_sum = a + b;
+    }
+
+    void on_secret(int value) {
+        last_secret = value;
     }
 };
 
@@ -105,6 +138,30 @@ int main() {
             saw_add3 = saw_add3 || (it->second.arg_count == 3);
         }
         expect(saw_add2 && saw_add3, "add overloads with 2 and 3 args are present");
+
+        UiSignals ui;
+        Dashboard dashboard;
+
+        auto hello_connection = ui.clicked.connect_reflected(tc, "hello");
+        auto dashboard_click_connection = ui.clicked.connect(dashboard, &Dashboard::on_clicked);
+        ui.add_requested.connect_reflected(tc, "add");
+        ui.add_requested.connect(dashboard, &Dashboard::on_add_requested);
+        ui.secret_requested.connect_reflected(tc, "some_private_method", true);
+        ui.secret_requested.connect(dashboard, &Dashboard::on_secret);
+
+        expect(ui.clicked.size() == 2, "clicked signal has two connected slots");
+        expect(ui.add_requested.size() == 2, "add_requested signal has two connected slots");
+        expect(ui.secret_requested.size() == 2, "secret_requested signal has two connected slots");
+
+        ui.fire_demo_events();
+
+        expect(dashboard.click_count == 1, "dashboard click slot invoked once");
+        expect(dashboard.last_sum == 42, "dashboard add slot received expected data");
+        expect(dashboard.last_secret == 99, "dashboard secret slot received expected data");
+
+        expect(ui.clicked.disconnect(hello_connection), "disconnect reflected hello slot succeeds");
+        expect(ui.clicked.disconnect(dashboard_click_connection), "disconnect dashboard click slot succeeds");
+        expect(ui.clicked.size() == 0, "clicked signal can be fully disconnected");
 
         std::cout << "[tests] all runtime checks passed\n";
     }
