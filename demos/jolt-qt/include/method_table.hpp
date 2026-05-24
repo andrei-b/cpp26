@@ -262,17 +262,7 @@ MethodEntry make_static_entry(std::string_view name, FN fn) {
 
 template <typename T>
 std::string_view type_name() {
-#if defined(__clang__) || defined(__GNUC__)
-    std::string_view name = __PRETTY_FUNCTION__;
-    const auto start = name.find("T = ") + 4;
-    const auto end = name.find(']', start);
-    return name.substr(start, end - start);
-#elif defined(_MSC_VER)
-    std::string_view name = __FUNCSIG__;
-    auto start = name.find("type_name<") + 10;
-    auto end = name.find(">(void)");
-    return name.substr(start, end - start);
-#endif
+    return std::meta::display_string_of(^^T);
 }
 
 template <typename T>
