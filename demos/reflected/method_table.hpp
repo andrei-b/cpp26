@@ -1,5 +1,8 @@
 #pragma once
 
+#ifdef USE_QVARIANT_AS_ANY
+#include <QVariant>
+#endif
 #include <any>
 #include <functional>
 #include <meta>
@@ -65,9 +68,15 @@ struct MethodReturnType {
     bool is_class = false;
 };
 
+
 struct MethodEntry {
     std::string_view name;
+#ifndef USE_QVARIANT_AS_ANY
     std::function<std::any(void*, std::span<const std::any>)> invoke;
+#endif
+#ifdef USE_QVARIANT_AS_ANY
+    std::function<QVariant(void*, std::span<const QVariant>)> invoke;
+#endif
     std::function<void(void*, void*)> direct_invoke;
     bool is_accessible_from_current = true;
     bool is_static = false;
@@ -115,6 +124,7 @@ struct function_traits<R (*)(Args...)> {
 template <typename T>
 using any_arg_t = std::remove_cvref_t<T>;
 
+#ifndef USE_QVARIANT_AS_ANY
 template <typename T>
 T any_cast_value(const std::any& a) {
     using U = any_arg_t<T>;
@@ -134,7 +144,43 @@ T any_cast_value(const std::any& a) {
         return *p;
     }
 }
+#endif
 
+
+#ifdef USE_QVARIANT_AS_ANY
+template <typename T>
+using qvariant_arg_t = std::remove_cvref_t<T>;
+
+template <typename T>
+T qvariant_cast_value(const QVariant& v) {
+    using U = qvariant_arg_t<T>;
+
+    if constexpr (std::is_lvalue_reference_v<T>) {
+        using Base = std::remove_reference_t<T>;
+        using NonCvBase = std::remove_cv_t<Base>;
+
+        // typed pointer access; fails if stored meta-type differs
+        const NonCvBase* p = v.value<NonCvBase*>();
+        if (!p) {
+            throw std::bad_cast{};
+        }
+        return static_cast<T>(*p);
+    } else {
+        if (!v.canConvert<U>()) {
+            throw std::bad_cast{};
+        }
+
+        QVariant copy = v;
+        if (!copy.convert(QMetaType::fromType<U>())) {
+            throw std::bad_cast{};
+        }
+
+        return copy.value<U>();
+    }
+}
+#endif
+
+#ifndef USE_QVARIANT_AS_ANY
 template <class C, class PMF, class Tuple, std::size_t... I>
 std::any invoke_member_with_anys_impl(C& obj,
                                       PMF pmf,
@@ -150,6 +196,26 @@ std::any invoke_member_with_anys_impl(C& obj,
         return std::any((obj.*pmf)(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...));
     }
 }
+#endif
+
+#ifdef USE_QVARIANT_AS_ANY
+template <class C, class PMF, class Tuple, std::size_t... I>
+std::any invoke_member_with_qvariants_impl(C& obj,
+                                      PMF pmf,
+                                      std::span<const QVariant> args,
+                                      std::index_sequence<I...>) {
+    using traits = function_traits<PMF>;
+    using R = typename traits::return_type;
+
+    if constexpr (std::is_void_v<R>) {
+        (obj.*pmf)(qvariant_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...);
+        return QVariant{};
+    } else {
+        return QVariant((obj.*pmf)(qvariant_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...));
+    }
+}
+#endif
+
 
 template <class C, class PMF, class Tuple, std::size_t... I>
 void invoke_member_direct_impl(C& obj,
@@ -169,6 +235,7 @@ void invoke_member_direct(C& obj, PMF pmf, void* args_ptr) {
     invoke_member_direct_impl<C, PMF, Tuple>(obj, pmf, args, std::make_index_sequence<N>{});
 }
 
+#ifndef USE_QVARIANT_AS_ANY
 template <class C, class PMF>
 std::any invoke_member_with_anys(C& obj,
                                  PMF pmf,
@@ -183,7 +250,26 @@ std::any invoke_member_with_anys(C& obj,
 
     return invoke_member_with_anys_impl<C, PMF, Tuple>(obj, pmf, args, std::make_index_sequence<N>{});
 }
+#endif
 
+#ifdef USE_QVARIANT_AS_ANY
+template <class C, class PMF>
+std::any invoke_member_with_qvariants(C& obj,
+                                 PMF pmf,
+                                 std::span<const QVariant> args) {
+    using traits = function_traits<PMF>;
+    using Tuple = typename traits::args_tuple;
+    constexpr std::size_t N = std::tuple_size_v<Tuple>;
+
+    if (args.size() != N) {
+        throw std::runtime_error("argument count mismatch");
+    }
+
+    return invoke_member_with_qvariants<C, PMF, Tuple>(obj, pmf, args, std::make_index_sequence<N>{});
+}
+#endif
+
+#ifndef USE_QVARIANT_AS_ANY
 template <class FN, class Tuple, std::size_t... I>
 std::any invoke_static_with_anys_impl(FN fn,
                                       std::span<const std::any> args,
@@ -198,6 +284,24 @@ std::any invoke_static_with_anys_impl(FN fn,
         return std::any(fn(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...));
     }
 }
+#endif
+
+#ifdef USE_QVARIANT_AS_ANY
+std::any invoke_static_with_qvariants_impl(FN fn,
+                                      std::span<const std::any> args,
+                                      std::index_sequence<I...>) {
+    using traits = function_traits<FN>;
+    using R = typename traits::return_type;
+
+    if constexpr (std::is_void_v<R>) {
+        fn(qvariant_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...);
+        return QVariant{};
+    } else {
+        return QVariant(fn(any_cast_value<std::tuple_element_t<I, Tuple>>(args[I])...));
+    }
+}
+#endif
+
 
 template <class FN, class Tuple, std::size_t... I>
 void invoke_static_direct_impl(FN fn,
@@ -237,7 +341,12 @@ MethodEntry make_member_entry(std::string_view name, PMF pmf) {
     entry.name = name;
     entry.function_pointer = pmf;
     entry.invoke = [pmf](void* obj, std::span<const std::any> args) -> std::any {
+#ifndef USE_QVARIANT_AS_ANY
         return invoke_member_with_anys(*static_cast<C*>(obj), pmf, args);
+#endif
+#ifdef USE_QVARIANT_AS_ANY
+        return invoke_member_with_qvariants(*static_cast<C*>(obj), pmf, args);
+#endif
     };
     entry.direct_invoke = [pmf](void* obj, void* args) {
         invoke_member_direct(*static_cast<C*>(obj), pmf, args);
@@ -251,9 +360,16 @@ MethodEntry make_static_entry(std::string_view name, FN fn) {
     MethodEntry entry{};
     entry.name = name;
     entry.function_pointer = fn;
+#ifndef USE_QVARIANT_AS_ANY
     entry.invoke = [fn]([[maybe_unused]] void* obj, std::span<const std::any> args) -> std::any {
         return invoke_static_with_anys(fn, args);
     };
+#endif
+#ifdef USE_QVARIANT_AS_ANY
+    entry.invoke = [fn]([[maybe_unused]] void* obj, std::span<const QVariant> args) -> QVariant {
+        return invoke_static_with_qvariants(fn, args);
+    };
+#endif
     entry.direct_invoke = [fn]([[maybe_unused]] void* obj, void* args) {
         invoke_static_direct(fn, args);
     };
